@@ -8,31 +8,52 @@ from scipy.stats import norm
 
 class gm3s:
     
-    def __init__(self, mode='b'):
-    
-        # Parameters
-        tf = 2000          # length of integration [yrs]
-        ts = 0             # starting year
-        dt = 1             # time step [keep at 1yr always]
-        nts = int((tf-ts)/dt) # number of time steps
-        t = np.arange(ts, tf, dt)       # array of times [yr]
+    def __init__(self, mode='b', tf=None, ts=0, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, hbar=None, gamma=None, tanphi=None, sigP=None, sigT=None, sigb=None):
+        """3-stage glacier model (Roe and Baker, 2014)
+
+        Parameters
+        ----------
+        mode : str, optional
+            Calculate anomalies based on mass balance 'b' or length 'l'. Default is 'b'.
+        tf : int
+            Length of integration (years).
+        ts : int, optional
+            Starting year. Default is 0.
+        dt : numeric, optional
+            Time step (years). Recommended to keep at 1 (default).
+        mu : numeric
+            Melt factor [m yr**-1 K**-1]
+        Atot : numeric
+            Total area of the glacier [m**2]
+        ATgt0 : numeric
+            Area of the glacier where some melting occurs [m**2]
+        Aabl : numeric
+            Ablation area [m**2] 
+        w : numeric
+            Characteristic width of the glacier tongue [m]. 
+        hbar : numeric
+            Characteristic ice thickness near the terminus [m]
+        gamma : numeric
+            Assumed surface lapse rate [K m**-1] 
+        tanphi : numeric
+            Assumed basal slope [no units]
+        sigP : numeric
+            Std. dev. of accumulation variability [m yr**-1]
+        sigT : numeric
+            Std. dev. of melt-season temperature variability [m yr**-1]
+        sigb : numeric
+            Std. dev. of annual-mean mass balance [m yr**-1]
+
+        Returns
+        -------
+        gm3s : object
+            
+            
+        """
         
-        ## glacier model parameters
-        mu = 0.65      # melt factor [m yr**-1 K**-1]
-        Atot = 3.95e6  # total area of the glacier [m**2]
-        ATgt0 = 3.4e6  # area of the glacier where some melting occurs [m**2]
-        Aabl = 1.95e6  # ablation area [m**2] 
-        w = 500        # characteristic width of the glacier tongue [m]. 
-        dt = 1         # incremental time step [yr]
-        hbar = 44.4186 # characteristic ice thickness near the terminus [m]
-        gamma = 6.5e-3 # assumed surface lapse rate [K m**-1] 
-        tanphi = 0.4   # assumed basal slope [no units]
-        
-        # natural climate variability - for temperature and precipitation forcing
-        sigP = 1.0     # std. dev. of accumulation variability [m yr**-1]
-        sigT = 0.8     # std. dev. of melt-season temperature variability [m yr**-1]
-        # natural climate variability - for mass balance forcing
-        sigb = 1.5     # std. dev. of annual-mean mass balance [m yr**-1]
+        nts = int((tf-ts)/dt)  # number of time steps
+        t = np.arange(ts, tf, dt)  # array of times [yr]
+
         
         ## linear model coefficients, combined from above parameters
         ## play with their values by choosing different numbers...
@@ -59,7 +80,6 @@ class gm3s:
         Tp = norm.rvs(scale=sigT, size=nts)
         Pp = norm.rvs(scale=sigP, size=nts)
         bp = norm.rvs(scale=sigb, size=nts)
-        
         
         L3s = np.zeros(nts) # create array of length anomalies
         
