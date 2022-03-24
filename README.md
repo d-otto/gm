@@ -1,1 +1,1 @@
-:)
+Python adaption of the 3-stage glacier model (Roe and Baker, 2014)
