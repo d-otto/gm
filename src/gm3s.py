@@ -8,7 +8,7 @@ from scipy.stats import norm
 
 class gm3s:
     
-    def __init__(self, mode='b', tf=None, ts=0, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, hbar=None, gamma=None, tanphi=None, sigP=None, sigT=None, sigb=None):
+    def __init__(self, mode='b', tf=None, ts=0, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, hbar=None, gamma=None, tanphi=None, sigP=None, sigT=None, sigb=None, T=None, P=None, b=None):
         """3-stage glacier model (Roe and Baker, 2014)
 
         Parameters
@@ -42,7 +42,13 @@ class gm3s:
         sigT : numeric
             Std. dev. of melt-season temperature variability [m yr**-1]
         sigb : numeric
-            Std. dev. of annual-mean mass balance [m yr**-1]
+            Std. dev. of annual-mean mass balance [m yr**-1]. One of `b` or `sigb` is required for `mode='b'`
+        T : array-like
+            Annual melt season temperature anomaly. One of `T` or `sigT` is required for `mode='l'`.
+        P : array-like
+            Annual accumulation anomaly. One of `P` or `sigP` is required  for `mode='l'`.
+        b : array-like
+            Annual mass balance anomaly. One of `b` or `sigb` is required for `mode='b'`.
 
         Returns
         -------
@@ -77,9 +83,18 @@ class gm3s:
         # Tp = array of melt-season temperature anomalise
         # Pp = array of accumlation anomalies
         # bp = array of mass balance anomalies
-        Tp = norm.rvs(scale=sigT, size=nts)
-        Pp = norm.rvs(scale=sigP, size=nts)
-        bp = norm.rvs(scale=sigb, size=nts)
+        if T:
+            Tp = T
+        else:
+            Tp = norm.rvs(scale=sigT, size=nts)
+        if P:
+            Pp = P
+        else:
+            Pp = norm.rvs(scale=sigP, size=nts)
+        if b:
+            bp = b
+        else:
+            bp = norm.rvs(scale=sigb, size=nts)
         
         L3s = np.zeros(nts) # create array of length anomalies
         
@@ -87,7 +102,7 @@ class gm3s:
         for i in range(5, nts):
             if mode == 'l': 
                 L3s[i] = 3*phi*L3s[i-1]-3*phi**2*L3s[i-2]+1*phi**3*L3s[i-3] \
-                         + dt**3*tau/(eps*tau)**3 * (beta*Pp(i-3) - alpha*Tp(i-3))
+                         + dt**3*tau/(eps*tau)**3 * (beta*Pp[i-3] - alpha*Tp[i-3])
             
             if mode == 'b':
         # if you want to use mass balance anomalies instead comment out the 2 lines
