@@ -3,6 +3,7 @@
 import os
 import sys
 import numpy as np
+import collections
 from scipy.stats import norm
 import matplotlib.pyplot as plt
 import argparse
@@ -11,6 +12,86 @@ from numpy.random import default_rng
 
 
 class gm1s:
+    def __init__(self, L=None, ts=None, H=None, bt=None, g=-9.81, rho=916.8, b_p=0, dbdt=None, mode=None):
+        # if isinstance(db, (int, float)):
+        #     self.mode = 'linear'
+        #     self.bt = bt + db
+        #     self.db = db
+        if isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
+            self.mode = 'discrete'
+            self.bt_p = bt + b_p
+            self.bt_eq = bt
+            self.b_p = b_p
+        
+        # if isinstance(ts, collections.abc.Sequence):
+        #     self.ts = np.array(ts)
+        # else:
+        #     self.ts = ts
+        
+        self.ts = ts
+        self.L_bar = L  # steady state without perturbations (m)
+        self.H = H  # m 
+        self.rho = rho  # kg/m^3
+        self.g = g  # m/s^2
+        self.dbdt = dbdt
+        self.eps = 1/np.sqrt(3)
+        
+        self.beta = self.L_bar/H  # eq. 1
+        self.tau = -H / bt
+        
+        self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
+        self.L_eq = self.L_bar + self.delta_L
+        self.L_p = self.tau * self.beta * self.b_p * (ts - self.tau * (1 - np.exp(-ts / self.tau)))
+        self.L = self.L_bar + self.L_p
+        
+        if np.abs(self.L_p.max()) > np.abs(self.L_p.min()):
+            self.L_p = np.maximumm.accumulate(self.L_p)
+        else:
+            self.L_p = np.minimum.accumulate(self.L_p)
+            
+        
+        
+        if self.mode == 'linear':
+            self.run_linear()
+    
+    
+    def run_linear(self):
+        
+        self.tau = -self.H / self.bt_p
+        self.L_eq = self.tau * self.beta * self.bt_p * (self.ts - self.tau)
+        self.L_p = np.zeros_like(self.ts, dtype='float')
+        
+        # Christian et al eq. 4
+        if self.mode == 'linear':
+            for i, t in enumerate(self.ts):
+                if self.bt[i] == 0:
+                    self.L_p[i] = 0
+                    continue
+                    
+                self.L_p[i] = self.tau[i] * self.beta * self.bt_p[i] * (t - self.tau[i] * (1 - np.exp(-t / self.tau[i])))
+                
+
+        self.L = self.L_bar + np.cumsum(self.L_p)
+        
+    
+    def run_discrete(self):
+        # self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
+        # self.L_p = np.zeros_like(self.ts, dtype='float')
+        # self.L_eq = np.full_like(self.ts, fill_value=np.nan, dtype='float')
+        # self.L_eq[0] = self.L_bar
+
+        # Christian et al eq. 4
+        #for i, t in enumerate(self.ts):        
+
+        return None
+            
+                
+
+        
+                
+
+
+class simple_flowline:
     
     #def __init__(self, mode='b', years=None, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, H=None, gamma=None, dzdx=None, sigP=None, sigT=None, sigb=None, Tp=None, Pp=None, bp=None, tau=None, P0=None):
     def __init__(self, **kwargs):
@@ -146,12 +227,14 @@ class gm1s:
         # Or also, use the simple, tau = hbar/b_term, if you know the terminus
         # balance rate from, e.g., observations
         if tau is None:
-            tau = w * H / (mu * gamma * dzdx * Aabl)
+            self.tau = w * H / (mu * gamma * dzdx * Aabl)
+        else:
+            self.tau = tau
         
         # coefficient needed in the model integrations
         # keep fixed - they are intrinsic to 3-stage model
-        eps = 1/np.sqrt(3)
-        phi = 1-dt/(eps*tau)
+        self.eps = 1/np.sqrt(3)
+        phi = 1-dt/(self.eps*tau)
         
         L = np.zeros(nts)  # create array of length anomalies
         
@@ -159,14 +242,14 @@ class gm1s:
         for i in range(5, nts):
             if mode == 'l': 
                 L[i] = 3*phi*L[i-1]-3*phi**2*L[i-2]+1*phi**3*L[i-3] \
-                         + dt**3*tau/(eps*tau)**3 * (beta*Pp[i-3] - alpha*Tp[i-3])
+                         + dt**3*self.tau/(self.eps*self.tau)**3 * (beta*Pp[i-3] - alpha*Tp[i-3])
             
             if mode == 'b':
                 L[i] = 3*phi*L[i-1]-3*phi**2*L[i-2]+1*phi**3*L[i-3] \
-                         + dt**3*tau/(eps*tau)**3 * (beta*bp[i-3])
+                         + dt**3*self.tau/(self.eps*self.tau)**3 * (beta*bp[i-3])
         
         # calculate function properties & spectral stuff
-        sig_L = tau * dt / 2 * (alpha**2 * sigT**2 + beta**2 * sigP**2)  # variance of length in the one-stage model
+        sig_L = self.tau * dt / 2 * (alpha**2 * sigT**2 + beta**2 * sigP**2)  # variance of length in the one-stage model
         
         # assign all local variables as attributes
         vars = locals().copy()
@@ -270,6 +353,9 @@ class gm3s:
         self.f_s = f_s
         self.tau = tau
         self.dzdx_s = dzdx
+        self.eps = 1/np.sqrt(3)
+        
+        
         
         
     def diff(self):
@@ -303,7 +389,7 @@ class gm3s:
         tau = self.tau
         L_bar = self.L_bar
         H = self.H
-        eps = 1 / np.sqrt(3)
+        eps = self.eps
         
         # saving input parameters for use in other methods
         self.dt = dt
@@ -318,22 +404,68 @@ class gm3s:
         self.h = np.zeros(n_steps)
         self.F = np.zeros(n_steps)
         self.L = np.zeros(n_steps)
+        self.L_p = np.zeros(n_steps)
         self.L_debug = np.zeros(n_steps)
 
         for t in ts:
             if t == ts[0]:
                 continue  # first value is 0
                 
-            #self.bt[t] = self._bt(t-1)
             self.h[t] = (1 - dt/(eps*tau))*self.h[t-dt] + self.bt[t]
             self.F[t] = (1 - dt/(eps*tau))*self.F[t-dt] + L_bar/(eps*tau)**2*self.h[t]  # writing F2 as F
             self.L[t] = (1 - dt/(eps*tau))*self.L[t-dt] + self.F[t]/(eps*H)
+            self.L_p[t] = self.L[t] - self.L[t-dt]
 
             try:
                 self.L_debug = dt*self.L_bar/(eps*self.H) * (dt/(eps*tau))**2 * self.bt[t-3]  # if I specified everything right, this should be the same is L[t]
             except:
                 pass
 
+    def continuous(self, t, t0=0, bt=None, trend='linear'):
+        tau = self.tau
+        L_bar = self.L_bar
+        H = self.H
+        eps = self.eps
+
+        # convert to list if it isn't already
+        if isinstance(t, (collections.abc.Sequence, np.ndarray)) is False:
+            t = [t]
+        elif isinstance(t, np.ndarray):
+            t = t.tolist()
+        if (trend != 'linear') & isinstance(bt, (int, float)):
+            if len(t) < 4:
+                bt = [bt] * [1,2,3,4]
+            else:
+                bt = [bt * tt for tt in t]
+                
+        # if t[0] > t0:
+        #     t.insert(0, t0)
+        # dt = np.diff(t)
+        dt = [ti - t0 for ti in t]
+        df = np.diff(dt)
+            
+        # todo: figure out what to do with updating parameters and such. don't belong in these methods?
+        self.bt = bt
+        
+        # define arrays/calculate without assuming anything about [t]
+        L = np.zeros(len(t))
+        beta = self.L_bar/self.H
+
+        if trend == 'linear':
+            for i, tt in enumerate(t):
+                # perhaps there is a better replacement for the bt term?
+                pass
+                
+                #L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * bt[i]  # if I specified everything right, this should be the same is L[t]
+        else:
+            for i, tt in enumerate(t):
+                # perhaps there is a better replacement for the bt term?
+                # Eq. 17
+                # todo: fix this using christian et al 2018
+                L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * self.bt[
+                    dt[i - 3]]  # if I specified everything right, this should be the same is L[t]
+            
+        return L
     
     def arma(self):
         
@@ -345,10 +477,25 @@ class gm3s:
             
     def power_spectrum(self, freq, sig_L_1s):
         P0 = 4 * self.tau * sig_L_1s  # power spectrum in the limit f -> 0 using the variance from the 1s model
-        P_spec = P0 * (1-self.K)**6 / (1 - 2 * self.K * np.cos(2*np.pi*freq*self.dt) + self.K**2)**3
+        P_spec = P0 * (1-self.K)**6 / (1 - 2 * self.K * np.cos(2*np.pi*freq*self.dt) + self.K**2)**3  # eq. 20
         return P_spec
-            
-      
+    
+    def phase(self, freq):
+        ''' Mostly correct? Why do I have to multiply by 1j?'''
+        
+        H = np.exp(-6 * np.pi * 1j * freq * self.dt)/(1 - self.K * np.exp(-2 * np.pi * 1j * freq * self.dt))**3  # eq. 19b
+        phase = np.angle(H * 1j, deg=True)
+        
+        return phase
+    
+    def acf(self, t):
+        '''Based on the continuous form of the 3-stage equations'''
+        eps = self.eps
+        tau = self.tau
+        
+        acf = np.exp(-t/(eps*tau)) * (1 + t/(eps*tau) + 1/3*(t/(eps*tau))**2)
+        return acf
+        
             
 class flowline:
     
