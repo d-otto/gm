@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from gm3s import gm3s
+from lgm import gm3s
 import plotly.express as px
 import plotly.io as pio
 pio.renderers.default = 'browser'

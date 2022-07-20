@@ -13,46 +13,48 @@ from numpy.random import default_rng
 
 class gm1s:
     def __init__(self, L=None, ts=None, H=None, bt=None, g=-9.81, rho=916.8, b_p=0, dbdt=None, mode=None):
-        # if isinstance(db, (int, float)):
-        #     self.mode = 'linear'
-        #     self.bt = bt + db
-        #     self.db = db
-        if isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
+        if isinstance(dbdt, (int, float)) & (dbdt is not None):
+            self.mode = 'linear'
+            self.bt_p = np.full_like(ts, fill_value=dbdt) + bt
+            self.b_p = np.full_like(ts, fill_value=dbdt)
+            self.bt_eq = bt
+        elif isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
             self.mode = 'discrete'
             self.bt_p = bt + b_p
             self.bt_eq = bt
             self.b_p = b_p
-        
-        # if isinstance(ts, collections.abc.Sequence):
-        #     self.ts = np.array(ts)
-        # else:
-        #     self.ts = ts
+        elif isinstance(b_p, (int, float)):
+            # step change
+            # todo: implement sol'n for step change
+            self.mode = 'discrete'
+            b_p = np.full_like(ts, fill_value=b_p)
+            self.bt_p = bt + b_p
+            self.bt_eq = bt
+            self.b_p = b_p
         
         self.ts = ts
+        self.dt = np.diff(ts, prepend=0)
         self.L_bar = L  # steady state without perturbations (m)
         self.H = H  # m 
-        self.rho = rho  # kg/m^3
-        self.g = g  # m/s^2
         self.dbdt = dbdt
-        self.eps = 1/np.sqrt(3)
         
         self.beta = self.L_bar/H  # eq. 1
         self.tau = -H / bt
         
-        self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
-        self.L_eq = self.L_bar + self.delta_L
-        self.L_p = self.tau * self.beta * self.b_p * (ts - self.tau * (1 - np.exp(-ts / self.tau)))
-        self.L = self.L_bar + self.L_p
+        # self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
+        # self.L_eq = self.L_bar + self.delta_L
+        # self.L_p = self.tau * self.beta * self.b_p * (ts - self.tau * (1 - np.exp(-ts / self.tau)))
+        # self.L = self.L_bar + self.L_p
         
-        if np.abs(self.L_p.max()) > np.abs(self.L_p.min()):
-            self.L_p = np.maximumm.accumulate(self.L_p)
-        else:
-            self.L_p = np.minimum.accumulate(self.L_p)
+        # if np.abs(self.L_p.max()) > np.abs(self.L_p.min()):
+        #     self.L_p = np.maximumm.accumulate(self.L_p)
+        # else:
+        #     self.L_p = np.minimum.accumulate(self.L_p)
             
-        
-        
         if self.mode == 'linear':
             self.run_linear()
+        elif self.mode == 'discrete':
+            self.run_discrete()
     
     
     def run_linear(self):
@@ -64,7 +66,7 @@ class gm1s:
         # Christian et al eq. 4
         if self.mode == 'linear':
             for i, t in enumerate(self.ts):
-                if self.bt[i] == 0:
+                if self.bt_p[i] == 0:
                     self.L_p[i] = 0
                     continue
                     
@@ -75,15 +77,20 @@ class gm1s:
         
     
     def run_discrete(self):
-        # self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
-        # self.L_p = np.zeros_like(self.ts, dtype='float')
-        # self.L_eq = np.full_like(self.ts, fill_value=np.nan, dtype='float')
-        # self.L_eq[0] = self.L_bar
-
-        # Christian et al eq. 4
-        #for i, t in enumerate(self.ts):        
-
-        return None
+        self.L_p = np.empty_like(self.ts, dtype='float')
+        self.L_p_eq = self.tau * self.beta * self.b_p
+        self.L_eq = self.tau * self.beta * self.b_p + self.L_bar
+        
+        for i, t in enumerate(self.ts):
+            # Roe and Baker (2014) eq. 8
+            if i == 0:
+                self.L_p[i] = self.beta * t * self.b_p[i]
+                continue
+            #self.L_p[i] = (1 - self.dt[i]/self.tau) * self.L_p[i-1] + self.beta * self.dt[i] * self.b_p[i]
+            self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[i - 1] + self.beta * self.dt[i] * self.b_p[i]
+            
+        self.L = self.L_bar + self.L_p
+            
             
                 
 
@@ -344,17 +351,25 @@ class gm3s:
     
     """
     
-    def __init__(self, L, H, tau, dzdx, rho=916.8, g=-9.81, f_d=1.9e-24, f_s=5.7e-20):
+    def __init__(self, L, H, ts, bt=None, tau=None, dzdx=None, rho=916.8, g=-9.81, f_d=1.9e-24, f_s=5.7e-20):
         self.L_bar = L  # m
         self.H = H  # m 
         self.rho = rho  # kg/m^3
         self.g = g  # m/s^2
         self.f_d = f_d
         self.f_s = f_s
-        self.tau = tau
         self.dzdx_s = dzdx
         self.eps = 1/np.sqrt(3)
+        self.bt_eq = bt
         
+        self.ts = ts
+        self.dt = np.diff(self.ts, prepend=-1)  # works idk why
+        
+        if tau is None:
+            self.tau = -H / bt
+        else:
+            self.tau = tau
+        self.K = 1 - self.dt / (self.eps * self.tau)
         
         
         
@@ -384,22 +399,18 @@ class gm3s:
         dL_p = F2_p / H - L_p / tau3  # 14c
         
     
-    def discrete(self, years, dt, bt):
+    def linear(self, bt=None):
+        if bt is not None:
+            self.bt = bt
+        
         # convenience renaming
         tau = self.tau
         L_bar = self.L_bar
         H = self.H
-        eps = self.eps
-        
-        # saving input parameters for use in other methods
-        self.dt = dt
-        self.bt = bt
-        self.K = 1 - dt / (eps * tau)
-        ts = np.array(range(0, years, dt))
-        self.ts = ts
+        eps = self.eps       
+        ts = self.ts
         
         # fluxes (discritized versions of eq14)
-
         n_steps = len(ts)
         self.h = np.zeros(n_steps)
         self.F = np.zeros(n_steps)
@@ -407,71 +418,70 @@ class gm3s:
         self.L_p = np.zeros(n_steps)
         self.L_debug = np.zeros(n_steps)
 
-        for t in ts:
-            if t == ts[0]:
-                continue  # first value is 0
-                
-            self.h[t] = (1 - dt/(eps*tau))*self.h[t-dt] + self.bt[t]
-            self.F[t] = (1 - dt/(eps*tau))*self.F[t-dt] + L_bar/(eps*tau)**2*self.h[t]  # writing F2 as F
-            self.L[t] = (1 - dt/(eps*tau))*self.L[t-dt] + self.F[t]/(eps*H)
-            self.L_p[t] = self.L[t] - self.L[t-dt]
+        self.h[0] = 0
+        # self.F[0] = 0
+        self.L[0] = self.L_bar
+        # self.L_p[0] = 0
+        # self.L_debug[0] = 0
 
+        for i,t in enumerate(ts):
+
+            self.h[i] = (1 - self.dt[i] / (eps * tau)) * self.h[t - self.dt[i]] + self.bt[i]
+            self.F[i] = (1 - self.dt[i] / (eps * tau)) * self.F[t - self.dt[i]] + L_bar / (eps * tau)**2 * self.h[i]  # writing F2 as F
+            self.L[i] = (1 - self.dt[i] / (eps * tau)) * self.L[t - self.dt[i]] + self.F[i] / (eps * H)
+            self.L_p[i] = self.L[i] - self.L[t - self.dt[i]]
+    
             try:
-                self.L_debug = dt*self.L_bar/(eps*self.H) * (dt/(eps*tau))**2 * self.bt[t-3]  # if I specified everything right, this should be the same is L[t]
+                self.L_debug = self.dt * self.L_bar / (eps * self.H) * (self.dt / (eps * tau))**2 * self.bt[t - 3]  # if I specified everything right, this should be the same is L[t]
             except:
                 pass
 
-    def continuous(self, t, t0=0, bt=None, trend='linear'):
+    def continuous(self, bt=None, trend=None):
+        if bt is not None:
+            self.bt = bt
+            
         tau = self.tau
         L_bar = self.L_bar
         H = self.H
         eps = self.eps
+        ts = self.ts
 
-        # convert to list if it isn't already
-        if isinstance(t, (collections.abc.Sequence, np.ndarray)) is False:
-            t = [t]
-        elif isinstance(t, np.ndarray):
-            t = t.tolist()
-        if (trend != 'linear') & isinstance(bt, (int, float)):
-            if len(t) < 4:
-                bt = [bt] * [1,2,3,4]
-            else:
-                bt = [bt * tt for tt in t]
+        # # convert to list if it isn't already
+        # if isinstance(ts, (collections.abc.Sequence, np.ndarray)) is False:
+        #     ts = [ts]
+        # elif isinstance(ts, np.ndarray):
+        #     ts = ts.tolist()
+        # if (trend != 'linear') & isinstance(bt, (int, float)):
+        #     if len(ts) < 4:
+        #         bt = [bt] * [1,2,3,4]
+        #     else:
+        #         bt = [bt * tt for tt in ts]
                 
         # if t[0] > t0:
         #     t.insert(0, t0)
-        # dt = np.diff(t)
-        dt = [ti - t0 for ti in t]
-        df = np.diff(dt)
-            
-        # todo: figure out what to do with updating parameters and such. don't belong in these methods?
-        self.bt = bt
+        dt = np.diff(ts, prepend=-1)
         
         # define arrays/calculate without assuming anything about [t]
-        L = np.zeros(len(t))
-        beta = self.L_bar/self.H
+        self.L = np.zeros_like(ts, dtype='float')
 
         if trend == 'linear':
-            for i, tt in enumerate(t):
+            for i, t in enumerate(ts):
                 # perhaps there is a better replacement for the bt term?
                 pass
-                
-                #L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * bt[i]  # if I specified everything right, this should be the same is L[t]
+                self.L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * bt[i]  # if I specified everything right, this should be the same is L[t]
         else:
-            for i, tt in enumerate(t):
-                # perhaps there is a better replacement for the bt term?
-                # Eq. 17
-                # todo: fix this using christian et al 2018
-                L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * self.bt[
-                    dt[i - 3]]  # if I specified everything right, this should be the same is L[t]
+            for i, t in enumerate(ts):
+                # Roe and Baker Eq. 17
+                #self.L[i] = (3 * self.K[i] * self.L[ts[i-1]]) - (3 * self.K[i]**2 * self.L[ts[i-2]]) + (3 * self.K[i]**3 * self.L[ts[i-3]])
+                self.L[i] = dt[i] * self.L_bar / (self.eps * self.H) * (dt[i] / (self.eps * self.tau))**2 * self.bt[i-3]
             
-        return L
+            
     
     def arma(self):
-        
-        # discretized
-        for t in T:
-            # L_p[t] = 3*K*L_p[t-1] - 3*K**2*L_p[t-2] - 3*K**3*L_p[t-3]
+        def ar():
+            L_p[t] = 3*K*L_p[t-1] - 3*K**2*L_p[t-2] - 3*K**3*L_p[t-3]
+            
+        def ma():
             L_p[t] = dt * L_bar / (eps * H) * (dt / (eps * tau))**2 * bd[t - 3]
        
             

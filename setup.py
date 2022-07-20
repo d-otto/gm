@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="3-stage-glacier-model",
+    name="lgm",
     version="0.0.1",
     author="Daniel Otto",
     author_email="drotto@uw.edu",
