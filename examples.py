@@ -74,41 +74,47 @@ from src import lgm
 
 # %% Fig. 7
 
-params_1s = dict(
+params_3s = dict(
+    Atot=8000,
+    W=1,
     L=8000,
     H=44,
     tau=6.73,
     dzdx=0.4,
-    ts=np.arange(0, 50, 1)
+    ts=np.arange(0, 50, 1),
+    bt=0,
+    b_p=np.concatenate([
+        np.tile(0, 1), np.tile(0.5, 49)
+    ]),
 )
 
 years = 100
 dt = 1
 
-m3s = lgm.gm3s(**params_1s)
-m3s.linear(bt=np.tile(0.5, 50))
+m3s = lgm.gm3s(**params_3s)
+m3s.linear()
 
 t = m3s.ts / m3s.tau
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(dpi=200)
 ax.plot(t, m3s.L / m3s.L.max(), label='length')
 ax.plot(t, m3s.F / m3s.F.max(), label='flux')
 ax.plot(t, m3s.h / m3s.h.max(), label='height')
 ax.legend()
 
 # %% Fig. 8c
-freq = np.arange(0, 1 / np.e, 2 * np.pi / 10000)
-spectrum = m3s.power_spectrum(freq=freq, sig_L_1s=1)
-fig, ax = plt.subplots()
-ax.set_xscale('log')
-ax.set_yscale('log')
-ax.plot(freq, spectrum, label='power spectrum')
+# freq = np.arange(0, 1 / np.e, 2 * np.pi / 10000)
+# spectrum = m3s.power_spectrum(freq=freq, sig_L_1s=1)
+# fig, ax = plt.subplots()
+# ax.set_xscale('log')
+# ax.set_yscale('log')
+# ax.plot(freq, spectrum, label='power spectrum')
 
 #%% Fig 8d.
-freq = np.linspace(1/1e4, 1, int(1e4))
-phase = m3s.phase(freq=freq)
-fig, ax = plt.subplots()
-ax.set_xscale('log')
-ax.plot(freq, phase, label='phase')
+# freq = np.linspace(1/1e4, 1, int(1e4))
+# phase = m3s.phase(freq=freq)
+# fig, ax = plt.subplots()
+# ax.set_xscale('log')
+# ax.plot(freq, phase, label='phase')
 
 #%% Fig 8b.
 t = np.arange(0, 40, 1)
@@ -119,22 +125,25 @@ ax.plot(t, acf, label='ACF')
 
 #%% Fig 8a.
 
-params_1s = dict(
+params_3s = dict(
+    Atot=8000,
+    W=1,
     L=8000,
     H=44,
     tau=6.73,
     dzdx=0.4,
+    bt=0,
     ts=np.arange(0, 50, 1)
 )
 
 years = 100
 dt = 1
 
-m3s = lgm.gm3s(**params_1s)
+m3s = lgm.gm3s(**params_3s)
 m3s.linear(bt=np.tile(-0.5, 50))
 L_retreat = m3s.L + m3s.L_bar
 
-m3s = lgm.gm3s(**params_1s)
+m3s = lgm.gm3s(**params_3s)
 m3s.linear(bt=np.tile(0.5, 50))
 L_advance = m3s.L + m3s.L_bar
 
@@ -142,49 +151,6 @@ fig, ax = plt.subplots()
 ax.plot(m3s.ts, L_advance, label='Length')
 ax.plot(m3s.ts, L_retreat, label='Length')
 ax.set_xlim(-5, 30)
-
-#%%
-
-# model.continuous(3, bt=0.5)
-# 
-# model.continuous(t=np.arange(0, 100, 1), bt=-0.5)
-
-
-#%% Linear trend in mass balance
-linear_params = dict(
-    L=8000,
-    H=44,
-    dbdt=-0.005,
-    bt=-5,
-    ts=np.arange(0, 100, 1)
-)
-linear_model = lgm.gm1s(**linear_params)
-
-
-# Step change in mass balance
-step_params = dict(
-    L=8000,
-    H=44,
-    bt=-5,
-    b_p=-0.5,
-    ts=np.arange(0, 100, 1)
-)
-step_model = lgm.gm1s(**step_params)
-
-
-# custom mass balance series
-discrete_params = dict(
-    L=8000,
-    H=44,
-    bt=-5,
-    b_p=np.arange(0, -0.5, -0.005),
-    ts=np.arange(0, 100, 1)
-)
-discrete_model = lgm.gm1s(**discrete_params)
-
-print(linear_model.L)
-print(step_model.L)
-print(discrete_model.L)
 
 
 #%% Looking more at the linear model
@@ -206,7 +172,7 @@ m1s = lgm.gm1s(**params_1s)
 fig, ax = plt.subplots(3,1, figsize=(8,10), dpi=150)
 ax[0].plot(m1s.ts, m1s.L_eq, label='L_eq')
 ax[0].plot(m1s.ts, m1s.L, label='L')
-ax[1].plot(m1s.ts / m1s.tau, m1s.L_p/m1s.L_p_eq, label='L_p/delta_L')
+ax[1].plot(m1s.ts / m1s.tau, m1s.L_p/m1s.L_eq, label='L_p/delta_L')
 ax[2].plot(m1s.ts, np.concatenate(b_p), label='mass balance')
 #ax[1].plot(m1s.ts / m1s.tau, np.exp(-m1s.ts / m1s.tau) - 1 , label='L_p')
 ax[0].set_xlabel('t')
@@ -218,28 +184,58 @@ fig.show()
  
 #%% Comparing 3s and 1s
 
-params_3s = dict(
+# todo : look at the 3s model changing before the start of the climate trend
+
+# trend
+# b_p = np.concatenate([
+#     -1/50 * np.arange(0, 50, 1),
+#     np.tile(-1, 250)
+# ])
+
+# step
+b_p = np.concatenate([
+    np.tile(0, 50),
+    np.tile(-1, 250)
+])
+
+params_1s = dict(
     L=8000,
-    H=200,
-    bt=-3.0,
+    H=100,
+    bt=-1,
+    ts=np.arange(0, 300, 1),
+    b_p=b_p,
+)
+params_3s = dict(
+    Atot=8000,
+    W=1,
+    L=8000,
+    H=100,
+    bt=-1,
     ts=np.arange(0, 300, 1)
 )
-b_p = [
-    np.tile(-1, 20), np.tile(0, 280)
-]
 
+
+m1s = lgm.gm1s(**params_1s)
 m3s = lgm.gm3s(**params_3s)
-m3s.continuous(bt=np.concatenate(b_p))
-L_retreat = m3s.L + m3s.L_bar
+m3s.discrete(bt=b_p)
 
-print(m3s.L)
+#print(m3s.L_p)
 #print(m3s.bt)
 #print(m3s.F)
 #print(m3s.L)
 
-fig, ax = plt.subplots(1,1, figsize=(8,10), dpi=150)
-ax.plot(m1s.ts, m1s.L, label='1s')
-ax.plot(m3s.ts, m3s.L + m3s.L_bar, label='3s')
-ax.set_xlabel('t')
-leg = ax.legend()
+fig, ax = plt.subplots(3,1, figsize=(8,10), dpi=150)
+ax[0].plot(m1s.ts, m1s.L, label='1s')
+ax[0].plot(m3s.ts, m3s.L, label='3s')
+
+ax[1].plot(m1s.ts, m1s.bt_p, label='1s bt_p',)
+ax[1].plot(m3s.ts, m3s.bt_p, label='3s bt_p',)
+
+ax[2].plot(m1s.ts, m1s.L_p, label='1s L_p', color='teal')
+ax[2].plot(m3s.ts, m3s.L_p, label='3s L_p', color='orange')
+ax[2].plot(m1s.ts, m1s.dL, label='1s L_eq', color='blue')
+ax[2].plot(m3s.ts, m3s.dL, label='3s L_eq', color='red')
+
+ax[1].set_xlabel('t')
+leg = [axis.legend() for axis in ax]
 fig.show()

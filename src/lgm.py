@@ -33,31 +33,21 @@ class gm1s:
             self.b_p = b_p
         
         self.ts = ts
-        self.dt = np.diff(ts, prepend=0)
+        self.dt = np.diff(ts, prepend=-1)
         self.L_bar = L  # steady state without perturbations (m)
         self.H = H  # m 
         self.dbdt = dbdt
         
         self.beta = self.L_bar/H  # eq. 1
         self.tau = -H / bt
-        
-        # self.delta_L = self.tau * self.beta * np.cumsum(self.b_p)
-        # self.L_eq = self.L_bar + self.delta_L
-        # self.L_p = self.tau * self.beta * self.b_p * (ts - self.tau * (1 - np.exp(-ts / self.tau)))
-        # self.L = self.L_bar + self.L_p
-        
-        # if np.abs(self.L_p.max()) > np.abs(self.L_p.min()):
-        #     self.L_p = np.maximumm.accumulate(self.L_p)
-        # else:
-        #     self.L_p = np.minimum.accumulate(self.L_p)
             
         if self.mode == 'linear':
-            self.run_linear()
+            self.linear()
         elif self.mode == 'discrete':
-            self.run_discrete()
+            self.discrete()
     
     
-    def run_linear(self):
+    def linear(self):
         
         self.tau = -self.H / self.bt_p
         self.L_eq = self.tau * self.beta * self.bt_p * (self.ts - self.tau)
@@ -76,26 +66,19 @@ class gm1s:
         self.L = self.L_bar + np.cumsum(self.L_p)
         
     
-    def run_discrete(self):
+    def discrete(self):
         self.L_p = np.empty_like(self.ts, dtype='float')
-        self.L_p_eq = self.tau * self.beta * self.b_p
         self.L_eq = self.tau * self.beta * self.b_p + self.L_bar
+        self.dL = self.L_eq - self.L_bar
         
         for i, t in enumerate(self.ts):
             # Roe and Baker (2014) eq. 8
             if i == 0:
                 self.L_p[i] = self.beta * t * self.b_p[i]
                 continue
-            #self.L_p[i] = (1 - self.dt[i]/self.tau) * self.L_p[i-1] + self.beta * self.dt[i] * self.b_p[i]
             self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[i - 1] + self.beta * self.dt[i] * self.b_p[i]
-            
         self.L = self.L_bar + self.L_p
-            
-            
-                
-
-        
-                
+                    
 
 
 class simple_flowline:
@@ -351,16 +334,28 @@ class gm3s:
     
     """
     
-    def __init__(self, L, H, ts, bt=None, tau=None, dzdx=None, rho=916.8, g=-9.81, f_d=1.9e-24, f_s=5.7e-20):
+    def __init__(self, L, H, ts, bt=None, b_p=None, tau=None, dzdx=None, Atot=None, W=None):
+        if isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
+            self.mode = 'discrete'
+            self.bt_p = bt + b_p
+            self.bt_eq = bt
+            self.b_p = b_p
+        elif isinstance(b_p, (int, float)):
+            # step change
+            # todo: implement sol'n for step change
+            self.mode = 'discrete'
+            b_p = np.full_like(ts, fill_value=b_p)
+            self.bt_p = bt + b_p
+            self.bt_eq = bt
+            self.b_p = b_p
+        
         self.L_bar = L  # m
         self.H = H  # m 
-        self.rho = rho  # kg/m^3
-        self.g = g  # m/s^2
-        self.f_d = f_d
-        self.f_s = f_s
         self.dzdx_s = dzdx
         self.eps = 1/np.sqrt(3)
         self.bt_eq = bt
+        self.Atot = Atot
+        self.W = W
         
         self.ts = ts
         self.dt = np.diff(self.ts, prepend=-1)  # works idk why
@@ -370,6 +365,7 @@ class gm3s:
         else:
             self.tau = tau
         self.K = 1 - self.dt / (self.eps * self.tau)
+        self.beta = self.Atot * self.dt / (self.W * self.H)
         
         
         
@@ -398,10 +394,10 @@ class gm3s:
         dF2_p = L_bar / (tau1 * tau2) * h1_p - F2_p / tau2  # 14b
         dL_p = F2_p / H - L_p / tau3  # 14c
         
-    
     def linear(self, bt=None):
         if bt is not None:
-            self.bt = bt
+            self.b_p = bt
+            self.bt_p = self.bt_eq + self.b_p
         
         # convenience renaming
         tau = self.tau
@@ -426,19 +422,19 @@ class gm3s:
 
         for i,t in enumerate(ts):
 
-            self.h[i] = (1 - self.dt[i] / (eps * tau)) * self.h[t - self.dt[i]] + self.bt[i]
+            self.h[i] = (1 - self.dt[i] / (eps * tau)) * self.h[t - self.dt[i]] + self.bt_p[i]
             self.F[i] = (1 - self.dt[i] / (eps * tau)) * self.F[t - self.dt[i]] + L_bar / (eps * tau)**2 * self.h[i]  # writing F2 as F
             self.L[i] = (1 - self.dt[i] / (eps * tau)) * self.L[t - self.dt[i]] + self.F[i] / (eps * H)
             self.L_p[i] = self.L[i] - self.L[t - self.dt[i]]
     
             try:
-                self.L_debug = self.dt * self.L_bar / (eps * self.H) * (self.dt / (eps * tau))**2 * self.bt[t - 3]  # if I specified everything right, this should be the same is L[t]
+                self.L_debug = self.dt * self.L_bar / (eps * self.H) * (self.dt / (eps * tau))**2 * self.bt_p[t - 3]  # if I specified everything right, this should be the same is L[t]
             except:
                 pass
 
     def continuous(self, bt=None, trend=None):
         if bt is not None:
-            self.bt = bt
+            self.b_p = bt + self.bt_eq
             
         tau = self.tau
         L_bar = self.L_bar
@@ -475,14 +471,33 @@ class gm3s:
                 #self.L[i] = (3 * self.K[i] * self.L[ts[i-1]]) - (3 * self.K[i]**2 * self.L[ts[i-2]]) + (3 * self.K[i]**3 * self.L[ts[i-3]])
                 self.L[i] = dt[i] * self.L_bar / (self.eps * self.H) * (dt[i] / (self.eps * self.tau))**2 * self.bt[i-3]
             
+    def discrete(self, bt=None):
+        if bt is not None:
+            self.b_p = bt
+            self.bt_p = self.bt_eq + bt
             
-    
-    def arma(self):
-        def ar():
-            L_p[t] = 3*K*L_p[t-1] - 3*K**2*L_p[t-2] - 3*K**3*L_p[t-3]
+        K = self.K
+        eps = self.eps
+        tau = self.tau
+        beta = self.beta
+        
+        L_p = np.zeros_like(self.ts, dtype='float')
+        self.L_eq = self.tau * self.beta * self.b_p + self.L_bar
+        self.dL = self.L_eq - self.L_bar
+
+        # L3s(i) = 3 * phi * L3s(i - 1) -
+        # 3 * phi ^ 2 * L3s(i - 2)
+        # + 1 * phi ^ 3 * L3s(i - 3)...
+        # + dt ^ 3 * tau / (eps * tau) ^ 3 * (beta * bp(i - 3))
+        
+        for i, t in enumerate(self.ts):
+            L_p[i] = 3 * K[i] * L_p[i - 1] - \
+                     3 * K[i]**2 * L_p[i - 2] + \
+                     1 * K[i]**3 * L_p[i - 3] + \
+                     self.dt[i]**3 * self.tau / (eps * tau)**3 * (beta[i] * self.b_p[i - 3])
             
-        def ma():
-            L_p[t] = dt * L_bar / (eps * H) * (dt / (eps * tau))**2 * bd[t - 3]
+        self.L_p = L_p
+        self.L = self.L_bar + self.L_p
        
             
     def power_spectrum(self, freq, sig_L_1s):
@@ -769,3 +784,4 @@ class flowline:
             
         
         
+
