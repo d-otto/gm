@@ -194,15 +194,20 @@ fig.show()
 
 # step
 b_p = np.concatenate([
-    np.tile(0, 50),
-    np.tile(-1, 250)
+    np.tile(0, 100),
+    np.tile(-1, 100),
+    np.tile(0, 100),
+    np.linspace(0, -1, 50),
+    np.linspace(-1, 0, 50),
+    np.tile(0, 100),
 ])
 
 params_1s = dict(
     L=8000,
     H=100,
-    bt=-1,
-    ts=np.arange(0, 300, 1),
+    bt=0,
+    tau=10,
+    ts=np.arange(0, len(b_p), 1),
     b_p=b_p,
 )
 params_3s = dict(
@@ -210,32 +215,121 @@ params_3s = dict(
     W=1,
     L=8000,
     H=100,
-    bt=-1,
-    ts=np.arange(0, 300, 1)
+    bt=0,
+    tau=10,
+    b_p=b_p,
+    ts=np.arange(0, len(b_p), 1),
+    
 )
 
 
 m1s = lgm.gm1s(**params_1s)
 m3s = lgm.gm3s(**params_3s)
-m3s.discrete(bt=b_p)
+m3s.discrete()
 
 #print(m3s.L_p)
 #print(m3s.bt)
 #print(m3s.F)
 #print(m3s.L)
 
-fig, ax = plt.subplots(3,1, figsize=(8,10), dpi=150)
-ax[0].plot(m1s.ts, m1s.L, label='1s')
-ax[0].plot(m3s.ts, m3s.L, label='3s')
+fig, ax = plt.subplots(3,1, figsize=(12,10), dpi=150)
+ax[0].plot(m1s.ts, m1s.bt_p, label='1s bt_p',)
+ax[0].plot(m3s.ts, m3s.bt_p, label='3s bt_p',)
+ax[0].grid(which='both', axis='both')
 
-ax[1].plot(m1s.ts, m1s.bt_p, label='1s bt_p',)
-ax[1].plot(m3s.ts, m3s.bt_p, label='3s bt_p',)
+ax[1].plot(m1s.ts, m1s.L, label='1s L')
+ax[1].plot(m3s.ts, m3s.L, label='3s L')
+ax[1].grid(which='both', axis='both')
+
+
 
 ax[2].plot(m1s.ts, m1s.L_p, label='1s L_p', color='teal')
 ax[2].plot(m3s.ts, m3s.L_p, label='3s L_p', color='orange')
-ax[2].plot(m1s.ts, m1s.dL, label='1s L_eq', color='blue')
-ax[2].plot(m3s.ts, m3s.dL, label='3s L_eq', color='red')
+ax[2].plot(m1s.ts, m1s.L_eq, label='1s L_eq', color='blue')
+ax[2].plot(m3s.ts, m3s.L_eq, label='3s L_eq', color='red')
+ax[2].grid(which='both', axis='both')
 
-ax[1].set_xlabel('t')
+
+ax[2].set_xlabel('t')
 leg = [axis.legend() for axis in ax]
+fig.tight_layout()
+fig.show()
+
+
+
+#%%
+
+
+params_3s = dict(
+    Atot=8000,
+    W=1,
+    L=8000,
+    H=100,
+    bt=0,
+    tau=10,
+    ts=np.arange(0, 550, 1),
+)
+b_p = np.concatenate([
+    np.linspace(0, -1, 20),
+    np.tile(-1, 530),
+])
+tau2 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+
+b_p = np.concatenate([
+    np.linspace(0, -1, 60),
+    np.tile(-1, 490),
+])
+tau6 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+
+
+b_p = np.concatenate([
+    np.linspace(0, -1, 500),
+    np.tile(-1, 50),
+])
+tau50 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+# print(m3s.L_p)
+# print(m3s.bt)
+# print(m3s.F)
+# print(m3s.L)
+
+fig, ax = plt.subplots(4, 1, figsize=(12, 10), dpi=150)
+[axis.set_xlim((0, 10)) for axis in ax]
+[axis.xaxis.set_major_locator(mpl.ticker.MultipleLocator(1)) for axis in ax]
+[axis.yaxis.set_major_locator(mpl.ticker.MultipleLocator(0.2)) for axis in ax]
+[axis.yaxis.set_minor_locator(mpl.ticker.MultipleLocator(0.1)) for axis in ax]
+
+ax[0].plot(tau2.ts/tau2.tau, tau2.bt_p, label='2*tau bt_p', color='blue')
+ax[0].plot(tau6.ts/tau2.tau, tau6.bt_p, label='6*tau bt_p', color='red')
+ax[0].plot(tau50.ts/tau2.tau, tau50.bt_p, label='50*tau bt_p', color='orange')
+ax[0].grid(which='both', axis='both')
+ax[0].set_ylabel('bt_p')
+
+ax[1].plot(tau2.ts/tau2.tau, tau2.L_p/tau2.dL, label='2*tau L_p', color='blue')
+ax[1].plot(tau6.ts/tau2.tau, tau6.L_p/tau6.dL, label='6*tau L_p', color='red')
+ax[1].plot(tau50.ts/tau2.tau, tau50.L_p/tau50.dL, label='50*tau L_p', color='orange')
+ax[1].plot(tau2.ts/tau2.tau, tau2.L_eq/tau2.dL, label='2*tau L_eq', color='blue', ls='dashed')
+ax[1].plot(tau6.ts/tau2.tau, tau6.L_eq/tau6.dL, label='6*tau L_eq', color='red', ls='dashed')
+ax[1].plot(tau50.ts/tau2.tau, tau50.L_eq/tau50.dL, label='50*tau L_eq', color='orange', ls='dashed')
+ax[1].grid(which='both', axis='both')
+ax[1].set_ylim((-1, 0))
+ax[1].set_ylabel('L_p/dL')
+
+
+ax[2].plot(tau2.ts/tau2.tau, (tau2.L_p-tau2.L_eq)/tau2.dL, label='2*tau L', color='blue')
+ax[2].plot(tau6.ts/tau6.tau, (tau6.L_p-tau6.L_eq)/tau6.dL, label='6*tau L', color='red')
+ax[2].plot(tau50.ts/tau50.tau, (tau50.L_p-tau50.L_eq)/tau50.dL, label='50*tau L', color='orange')
+ax[2].grid(which='both', axis='both')
+ax[2].set_ylim((0, 1))
+ax[2].set_ylabel('(L_p - L_eq)/dL')
+
+ax[3].plot(tau2.ts/tau2.tau, tau2.L_p/tau2.L_eq, label='2*tau L_p', color='blue')
+ax[3].plot(tau6.ts/tau6.tau, tau6.L_p/tau6.L_eq, label='6*tau L_p', color='red')
+ax[3].plot(tau50.ts/tau50.tau, tau50.L_p/tau50.L_eq, label='50*tau L_p', color='orange')
+ax[3].grid(which='both', axis='both')
+ax[3].set_ylim((0, 1))
+ax[3].set_ylabel('L_p/L_eq')
+
+ax[3].set_xlabel('t/tau')
+leg = [axis.legend() for axis in ax]
+fig.tight_layout()
 fig.show()

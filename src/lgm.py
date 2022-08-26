@@ -4,15 +4,37 @@ import os
 import sys
 import numpy as np
 import collections
+
+import pandas as pd
 from scipy.stats import norm
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import argparse
 import scipy.io
 from numpy.random import default_rng
+import xarray as xr
+import copy
+
+#%%
+
+# preallocate empty array and assign slice by chrisaycock
+def shift(arr, num, fill_value=np.nan):
+    result = np.empty_like(arr)
+    if num > 0:
+        result[:num] = fill_value
+        result[num:] = arr[:-num]
+    elif num < 0:
+        result[num:] = fill_value
+        result[:num] = arr[-num:]
+    else:
+        result[:] = arr
+    return result
+
+#%%
 
 
 class gm1s:
-    def __init__(self, L=None, ts=None, H=None, bt=None, g=-9.81, rho=916.8, b_p=0, dbdt=None, mode=None):
+    def __init__(self, L=None, ts=None, H=None, bt=None, tau=None, g=-9.81, rho=916.8, b_p=0, dbdt=None, mode=None):
         if isinstance(dbdt, (int, float)) & (dbdt is not None):
             self.mode = 'linear'
             self.bt_p = np.full_like(ts, fill_value=dbdt) + bt
@@ -39,7 +61,10 @@ class gm1s:
         self.dbdt = dbdt
         
         self.beta = self.L_bar/H  # eq. 1
-        self.tau = -H / bt
+        if tau is None:
+            self.tau = -H / bt
+        else:
+            self.tau = tau
             
         if self.mode == 'linear':
             self.linear()
@@ -68,8 +93,7 @@ class gm1s:
     
     def discrete(self):
         self.L_p = np.empty_like(self.ts, dtype='float')
-        self.L_eq = self.tau * self.beta * self.b_p + self.L_bar
-        self.dL = self.L_eq - self.L_bar
+
         
         for i, t in enumerate(self.ts):
             # Roe and Baker (2014) eq. 8
@@ -78,174 +102,9 @@ class gm1s:
                 continue
             self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[i - 1] + self.beta * self.dt[i] * self.b_p[i]
         self.L = self.L_bar + self.L_p
-                    
-
-
-class simple_flowline:
-    
-    #def __init__(self, mode='b', years=None, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, H=None, gamma=None, dzdx=None, sigP=None, sigT=None, sigb=None, Tp=None, Pp=None, bp=None, tau=None, P0=None):
-    def __init__(self, **kwargs):
-        """
-
-        Parameters
-        ----------
-        mode : str, optional
-            Calculate anomalies based on mass balance 'b' or length 'l'. Default is 'b'.
-        years : int
-            Length of integration (years).
-        ts : int, optional
-            Starting year. Default is 0.
-        dt : numeric, optional
-            Time step (years). Recommended to keep at 1 (default).
-        mu : numeric
-            Melt factor [m yr**-1 K**-1]
-        Atot : numeric
-            Total area of the glacier [m**2]
-        ATgt0 : numeric
-            Area of the glacier where some melting occurs [m**2]
-        Aabl : numeric
-            Ablation area [m**2] 
-        w : numeric
-            Characteristic width of the glacier tongue [m]. 
-        H : numeric
-            Characteristic ice thickness near the terminus [m]
-        gamma : numeric
-            Assumed surface lapse rate [K m**-1] 
-        dzdx : numeric
-            Assumed basal slope [no units]
-        sigP : numeric
-            Std. dev. of accumulation variability [m yr**-1]
-        sigT : numeric
-            Std. dev. of melt-season temperature variability [m yr**-1]
-        sigb : numeric
-            Std. dev. of annual-mean mass balance [m yr**-1]. One of `b` or `sigb` is required for `mode='b'`
-        T : array-like
-            Annual melt season temperature anomaly. One of `T` or `sigT` is required for `mode='l'`.
-        P : array-like
-            Annual accumulation anomaly. One of `P` or `sigP` is required  for `mode='l'`.
-        b : array-like
-            Annual mass balance anomaly. One of `b` or `sigb` is required for `mode='b'`.
-
-        Returns
-        -------
-        linear_1s : object
-            
-            
-        """
-        
-        self.run(**kwargs)
-        
-        
-    def run(self, mode='b', years=None, dt=1, mu=None, Atot=None, ATgt0=None, Aabl=None, w=None, H=None, gamma=None, dzdx=None, sigP=None, sigT=None, sigb=None, Tp=None, Pp=None, bp=None, tau=None, P0=None):
-        """
-
-       Parameters
-       ----------
-       mode : str, optional
-           Calculate anomalies based on mass balance 'b' or length 'l'. Default is 'b'.
-       years : int
-           Length of integration (years).
-       ts : int, optional
-           Starting year. Default is 0.
-       dt : numeric, optional
-           Time step (years). Recommended to keep at 1 (default).
-       mu : numeric
-           Melt factor [m yr**-1 K**-1]
-       Atot : numeric
-           Total area of the glacier [m**2]
-       ATgt0 : numeric
-           Area of the glacier where some melting occurs [m**2]
-       Aabl : numeric
-           Ablation area [m**2] 
-       w : numeric
-           Characteristic width of the glacier tongue [m]. 
-       H : numeric
-           Characteristic ice thickness near the terminus [m]
-       gamma : numeric
-           Assumed surface lapse rate [K m**-1] 
-       dzdx : numeric
-           Assumed basal slope [no units]
-       sigP : numeric
-           Std. dev. of accumulation variability [m yr**-1]
-       sigT : numeric
-           Std. dev. of melt-season temperature variability [m yr**-1]
-       sigb : numeric
-           Std. dev. of annual-mean mass balance [m yr**-1]. One of `b` or `sigb` is required for `mode='b'`
-       T : array-like
-           Annual melt season temperature anomaly. One of `T` or `sigT` is required for `mode='l'`.
-       P : array-like
-           Annual accumulation anomaly. One of `P` or `sigP` is required  for `mode='l'`.
-       b : array-like
-           Annual mass balance anomaly. One of `b` or `sigb` is required for `mode='b'`.
-
-       Returns
-       -------
-       linear_1s : object
-
-       """
-        
-        # unpack kwargs 
-        # vars = locals().copy()
-        # ns = argparse.Namespace()
-        # for k, v in kwargs.items():
-        #     if k not in vars:
-        #         exec(f'{k} = {v}')  # Don't ever do this. Code would just become unreadable if I did setattr(self, k, v).
-        
-        nts = int((years) / dt)  # number of time steps
-        t = np.arange(0, years, dt)  # array of times [yr]
-
-        # note at this point you could create your own climate time series, using
-        # random forcing, trends, oscillations etc.
-        # Tp = array of melt-season temperature anomalise
-        # Pp = array of accumlation anomalies
-        # bp = array of mass balance anomalies
-        if Tp is None:
-            Tp = norm.rvs(scale=sigT, size=nts)
-        if Pp is None:
-            Pp = norm.rvs(scale=sigP, size=nts) + P0
-        if bp is None and mode == 'b':
-            bp = norm.rvs(scale=sigb, size=nts)
-        
-        ## linear model coefficients, combined from above parameters
-        ## play with their values by choosing different numbers...
-        alpha = -mu*ATgt0*dt/(w * H)
-        beta = Atot*dt/(w * H)
-        
-        # glacier memory [ys]
-        # this is the glacier response time  (i.e., memory) based on the above glacier geometry
-        # if you like, just pick a different time scale to see what happens. 
-        # Or also, use the simple, tau = hbar/b_term, if you know the terminus
-        # balance rate from, e.g., observations
-        if tau is None:
-            self.tau = w * H / (mu * gamma * dzdx * Aabl)
-        else:
-            self.tau = tau
-        
-        # coefficient needed in the model integrations
-        # keep fixed - they are intrinsic to 3-stage model
-        self.eps = 1/np.sqrt(3)
-        phi = 1-dt/(self.eps*tau)
-        
-        L = np.zeros(nts)  # create array of length anomalies
-        
-        ## integrate the 3 stage model equations forward in time
-        for i in range(5, nts):
-            if mode == 'l': 
-                L[i] = 3*phi*L[i-1]-3*phi**2*L[i-2]+1*phi**3*L[i-3] \
-                         + dt**3*self.tau/(self.eps*self.tau)**3 * (beta*Pp[i-3] - alpha*Tp[i-3])
-            
-            if mode == 'b':
-                L[i] = 3*phi*L[i-1]-3*phi**2*L[i-2]+1*phi**3*L[i-3] \
-                         + dt**3*self.tau/(self.eps*self.tau)**3 * (beta*bp[i-3])
-        
-        # calculate function properties & spectral stuff
-        sig_L = self.tau * dt / 2 * (alpha**2 * sigT**2 + beta**2 * sigP**2)  # variance of length in the one-stage model
-        
-        # assign all local variables as attributes
-        vars = locals().copy()
-        for k,v in vars.items():
-            if k not in self.__dict__:
-                setattr(self, k, v)
+        self.L_eq = self.tau * self.beta * self.bt_p 
+        self.dL = abs(self.L_p[-1])
+                        
                 
 
     def to_xarray(self):
@@ -253,12 +112,12 @@ class simple_flowline:
 
         ds = xr.Dataset(
             data_vars=dict(
-                bp=('t', self.bp),
+                bp=('t', self.b_p),
                 Pp=('t', self.Pp),
                 Tp=('t', self.Tp),
             ),
             coords=dict(
-                t=self.t
+                t=self.ts
             ),
             attrs=dict(
 
@@ -287,112 +146,139 @@ class simple_flowline:
 
 
 ################################################################################
-# class flowline_1s:
-#     '''
-#     "Most numerical models
-#     solve the shallow-ice equations (which neglect longitudinal
-#     stresses; e.g. Hutter, 1983) and incorporate a representation
-#     of basal sliding. For a one-dimensional flowline following the
-#     longitudinal profile of a glacier"
-#     
-#     "The first equation represents local
-#     mass conservation, while the second represents the transla-
-#     tion and deformation of ice associated with shear stresses. In
-#     combination, the equations have the form of a nonlinear
-#     diffusion equation in thickness."
-#     
-#     '''
-#     
-#     def __init__(self):
-#         ts =
-#         nts = int((tf - ts) / dt)  # number of time steps
-#         t = np.arange(ts, tf, dt)  # array of times [yr]
-#         
-#         
-#         
-#         dh = 
-#         dF = 
-#         
-#         rho =
-#         g =
-#         f_s = 
-#         h = 
-#         dz_s = 
-#         dx = 
-#         x = 
-#         
-#         Fx = rho**3 * g**3 * (f_s*h**2 + f_s) * h**3 * (dz_s/dx)**3
-
-
-################################################################################
 class gm3s:
     """ Real 3-stage linear glacier model
     
     Assumes Lambda << L_bar and h2_p, h3_p ~= H. Therefore, V1_p ~= h1_p * L_bar, 
     V2_p ~= h2_p * lambda, and V3_p ~= (L_p - Lambda)*H ... (see figure)
+
+    Parameters
+    ----------
+    mode : str, optional
+        Calculate anomalies based on mass balance 'b' or length 'l'. Default is 'b'.
+    ts : int
+        Timeseries of years.
+    mu : numeric
+        Melt factor [m yr**-1 K**-1]
+    Atot : numeric
+        Total area of the glacier [m**2]
+    ATgt0 : numeric
+        Area of the glacier where some melting occurs [m**2]
+    Aabl : numeric
+        Ablation area [m**2] 
+    w : numeric
+        Characteristic width of the glacier tongue [m]. 
+    H : numeric
+        Characteristic ice thickness near the terminus [m]
+    gamma : numeric
+        Assumed surface lapse rate [K m**-1] 
+    dzdx : numeric
+        Assumed basal slope [no units]
+    sigP : numeric
+        Std. dev. of accumulation variability [m yr**-1]
+    sigT : numeric
+        Std. dev. of melt-season temperature variability [m yr**-1]
+    sigb : numeric
+        Std. dev. of annual-mean mass balance [m yr**-1]. One of `b` or `sigb` is required for `mode='b'`
+    T : array-like
+        Annual melt season temperature anomaly. One of `T` or `sigT` is required for `mode='l'`.
+    P : array-like
+        Annual accumulation anomaly. One of `P` or `sigP` is required  for `mode='l'`.
+    b : array-like
+        Annual mass balance anomaly. One of `b` or `sigb` is required for `mode='b'`.
+
+    Returns
+    -------
+    linear_1s : object
+        
+        
+    
     
     
     """
     
-    def __init__(self, L, H, ts, bt=None, b_p=None, tau=None, dzdx=None, Atot=None, W=None):
-        if isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
-            self.mode = 'discrete'
-            self.bt_p = bt + b_p
-            self.bt_eq = bt
-            self.b_p = b_p
-        elif isinstance(b_p, (int, float)):
-            # step change
-            # todo: implement sol'n for step change
-            self.mode = 'discrete'
-            b_p = np.full_like(ts, fill_value=b_p)
-            self.bt_p = bt + b_p
-            self.bt_eq = bt
-            self.b_p = b_p
+    def __init__(self, L, H, ts, mode='b', bt=None, b_p=None, tau=None, dzdx=None,
+                 Atot=None, W=None, mu=None, gamma=None, Aabl=None, 
+                 sigT=None, sigP=None, sigb=None, P0=None, T_p=None, P_p=None,
+                 ATgt0=None):
+        self.ts = ts
+        self.dt = np.diff(self.ts+1, prepend=-1)  # works idk why
         
+        if mode == 'l':
+            # note at this point you could create your own climate time series, using
+            # random forcing, trends, oscillations etc.
+            # Tp = array of melt-season temperature anomalise
+            # Pp = array of accumlation anomalies
+            # bp = array of mass balance anomalies
+            if T_p is None:
+                self.T_p = norm.rvs(scale=sigT, size=len(ts))
+            if P_p is None:
+                self.P_p = norm.rvs(scale=sigP, size=len(ts)) + P0
+            if b_p is None and mode == 'b':
+                self.b_p = norm.rvs(scale=sigb, size=len(ts))
+            self.alpha = -mu * ATgt0 * self.dt / (w * H)
+            self.ATgt0 = ATgt0
+            self.sigT = sigT
+            self.sigP = sigP
+            self.sigb = sigb
+            self.P0 = P0
+            self.Aabl = Aabl
+            self.gamma = gamma
+            self.mu = mu
+        if mode == 'b':
+            if isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
+                pass
+            elif isinstance(b_p, (int, float)):
+                # step change
+                # todo: implement sol'n for step change
+                b_p = np.full_like(ts, fill_value=b_p)
+
+        self.mode=mode
+        self.bt_p = bt + b_p
+        self.bt_eq = bt
+        self.b_p = b_p
         self.L_bar = L  # m
         self.H = H  # m 
         self.dzdx_s = dzdx
-        self.eps = 1/np.sqrt(3)
-        self.bt_eq = bt
+        
         self.Atot = Atot
         self.W = W
-        
-        self.ts = ts
-        self.dt = np.diff(self.ts, prepend=-1)  # works idk why
-        
+
+        # glacier memory [ys]
+        # this is the glacier response time  (i.e., memory) based on the above glacier geometry
+        # if you like, just pick a different time scale to see what happens. 
+        # Or also, use the simple, tau = hbar/b_term, if you know the terminus
+        # balance rate from, e.g., observations
         if tau is None:
-            self.tau = -H / bt
+            try:
+                self.tau = W * H / (mu * gamma * dzdx * Aabl)
+            except:
+                try:
+                    self.tau = H / bt
+                except:
+                    pass
         else:
             self.tau = tau
+        
+        # coefficient needed in the model integrations
+        # keep fixed - they are intrinsic to 3-stage model
+        self.eps = 1 / np.sqrt(3)
         self.K = 1 - self.dt / (self.eps * self.tau)
         self.beta = self.Atot * self.dt / (self.W * self.H)
         
+    
+    def copy(self):
+        return copy.deepcopy(self)
+    
+    def to_pandas(self):
+        import pandas as pd
         
-        
-    def diff(self):
-        tau1 = tau2 = tau3 = tau * eps
-
-        F2_p = eps * H * (dL_p + L_p / (eps * tau))
-        bd_p = dh1_p + h1_p / tau1
-        h1_p = tau1 * tau2 / L_bar * (dF2_p + F2_p)
-
-        # fluxes
-        F1_p = h1_p * L_bar / tau1  # 13a
-        F2_p = h2_p * Lambda / tau2  # 13b
-        
-        # volume changes (12a-c)
-        dV1_p = bd_p * L_bar - F1_p  # w.r.t. time
-        dV2_p = F1_p - F2_p  # w.r.t. time
-        dV3_p = F2_p - L_p * bd_term  # w.r.t. time
-
-        heq_p = bd_p * tau1
-        Feq_p = bd_p * L_bar
-        Leq_p = Feq_p / bd_term
-
-        # fluxes (differential form of 3-stage)
-        dh1_p = bd_p - h1_p / tau1  # 14a
-        dF2_p = L_bar / (tau1 * tau2) * h1_p - F2_p / tau2  # 14b
-        dL_p = F2_p / H - L_p / tau3  # 14c
+        df = pd.DataFrame(data=dict(L_p=self.L_p,
+                                    L_eq=self.L_eq,
+                                    dL=self.dL,
+                                    bt_p=self.bt_p, ),
+                          index=pd.Index(self.ts, name='t'))
+        return df
         
     def linear(self, bt=None):
         if bt is not None:
@@ -403,7 +289,7 @@ class gm3s:
         tau = self.tau
         L_bar = self.L_bar
         H = self.H
-        eps = self.eps       
+        eps = self.eps
         ts = self.ts
         
         # fluxes (discritized versions of eq14)
@@ -431,73 +317,47 @@ class gm3s:
                 self.L_debug = self.dt * self.L_bar / (eps * self.H) * (self.dt / (eps * tau))**2 * self.bt_p[t - 3]  # if I specified everything right, this should be the same is L[t]
             except:
                 pass
-
-    def continuous(self, bt=None, trend=None):
-        if bt is not None:
-            self.b_p = bt + self.bt_eq
+    
             
-        tau = self.tau
-        L_bar = self.L_bar
-        H = self.H
-        eps = self.eps
-        ts = self.ts
-
-        # # convert to list if it isn't already
-        # if isinstance(ts, (collections.abc.Sequence, np.ndarray)) is False:
-        #     ts = [ts]
-        # elif isinstance(ts, np.ndarray):
-        #     ts = ts.tolist()
-        # if (trend != 'linear') & isinstance(bt, (int, float)):
-        #     if len(ts) < 4:
-        #         bt = [bt] * [1,2,3,4]
-        #     else:
-        #         bt = [bt * tt for tt in ts]
-                
-        # if t[0] > t0:
-        #     t.insert(0, t0)
-        dt = np.diff(ts, prepend=-1)
-        
-        # define arrays/calculate without assuming anything about [t]
-        self.L = np.zeros_like(ts, dtype='float')
-
-        if trend == 'linear':
-            for i, t in enumerate(ts):
-                # perhaps there is a better replacement for the bt term?
-                pass
-                self.L[i] = dt[i] * self.L_bar / (eps * self.H) * (dt[i] / (eps * tau))**2 * bt[i]  # if I specified everything right, this should be the same is L[t]
-        else:
-            for i, t in enumerate(ts):
-                # Roe and Baker Eq. 17
-                #self.L[i] = (3 * self.K[i] * self.L[ts[i-1]]) - (3 * self.K[i]**2 * self.L[ts[i-2]]) + (3 * self.K[i]**3 * self.L[ts[i-3]])
-                self.L[i] = dt[i] * self.L_bar / (self.eps * self.H) * (dt[i] / (self.eps * self.tau))**2 * self.bt[i-3]
-            
-    def discrete(self, bt=None):
-        if bt is not None:
-            self.b_p = bt
-            self.bt_p = self.bt_eq + bt
-            
+    def discrete(self):
+        # convenience renaming
         K = self.K
         eps = self.eps
         tau = self.tau
         beta = self.beta
         
         L_p = np.zeros_like(self.ts, dtype='float')
-        self.L_eq = self.tau * self.beta * self.b_p + self.L_bar
-        self.dL = self.L_eq - self.L_bar
+
 
         # L3s(i) = 3 * phi * L3s(i - 1) -
         # 3 * phi ^ 2 * L3s(i - 2)
         # + 1 * phi ^ 3 * L3s(i - 3)...
         # + dt ^ 3 * tau / (eps * tau) ^ 3 * (beta * bp(i - 3))
         
-        for i, t in enumerate(self.ts):
-            L_p[i] = 3 * K[i] * L_p[i - 1] - \
-                     3 * K[i]**2 * L_p[i - 2] + \
-                     1 * K[i]**3 * L_p[i - 3] + \
-                     self.dt[i]**3 * self.tau / (eps * tau)**3 * (beta[i] * self.b_p[i - 3])
-            
+        if self.mode=='b':
+            for i, t in enumerate(self.ts):
+                if i <= 3:
+                    continue
+                L_p[i] = 3 * K[i] * L_p[i - 1] - \
+                         3 * K[i]**2 * L_p[i - 2] + \
+                         1 * K[i]**3 * L_p[i - 3] + \
+                         self.dt[i]**3 * tau / (eps * tau)**3 * (beta[i] * self.b_p[i - 3])
+
+        if self.mode=='l':  
+            for i, t in enumerate(self.ts):
+                if i <= 3:
+                    continue
+                L_p[i] = 3 * K[i] * L_p[i - 1] - \
+                         3 * K[i]**2 * L_p[i - 2] + \
+                         1 * K[i]**3 * L_p[i - 3] + \
+                         self.dt[i]**3 * tau / (eps * tau)**3 * (beta[i] * self.P_p[i - 3] - alpha * self.T_p[i - 3])
+                
         self.L_p = L_p
         self.L = self.L_bar + self.L_p
+        self.L_eq = self.tau * self.beta * self.bt_p 
+        self.dL = abs(L_p[-1])
+        
+        return self
        
             
     def power_spectrum(self, freq, sig_L_1s):
@@ -522,9 +382,11 @@ class gm3s:
         return acf
         
             
+
+###############################################################################            
 class flowline:
     
-    def __init__(self, H, L0, dzdx, rho=916.8, g=9.81, f_d=1.9e-24, f_s=5.7e-20):
+    def __init__(self, L0, h0, W, dzdx, mu, Tbar, sigT, Pbar, sigP, gamma=6.5e-3, rho=916.8, f_d=1.9e-24, f_s=5.7e-20):
         '''
         This code solves the shallow-ice equations for ice flow down a 
         flowline with prescribed bed geometry. See Roe, JGlac, 2011, or 
@@ -577,211 +439,266 @@ class flowline:
 
         '''
         
+        #%%
         self.L0 = L0
-        self.H = H
+        self.h0 = h0
+        self.W = W
         self.dzdx = dzdx
-        self.rho = rho
-        self.g = g
+        self.rho = rho  # kg/m^3
         self.f_s = f_s
         self.f_d = f_d
-        
-        ###########################################
-        #define parameters
-        ###########################################
-        
-        rng = default_rng()
-        
-        rho=910 #kg/m^3
-        g=9.81# #m/s^2
-        n=3#
-        A=2.4e-24# #Pa^-3 s^-1
-        K=2*A*(rho*g)**n/(n+2)
-        K=K*np.pi*1e7  # make units m^2/yr
-        K=K#
+        self.g = 9.81  # m/s^2
+        self.n = 3  # shallow ice param
+        self.A = 2.4e-24  # #Pa^-3 s^-1
+        self.K = 2 * self.A * (rho * self.g)**self.n / (self.n + 2)
+        self.K = self.K * np.pi * 1e7  # make units m^2/yr
 
-        xmx = 20000  # the domain size in m
-        delx = 200  #grid spacing in m
-        nxs = round(xmx/delx) - 1  #number of grid points
 
-        #delt = 0.00125# # time step in yrs. needed if delx = 50
-        delt = 0.025# # time step in yrs
-        ts = 0  # starting time
-        tf = 10000  # final time
-        nts=int(np.floor((tf-ts)/delt) + 1)  #number of time steps ('round' used because need nts as integer)
+        # set model parameters
+        self.ts = 0  # starting time
+        self.tf = 100  # final time
+        self.delt = 0.05  # # time step in yrs
+        # delt = 0.00125# # time step in yrs. needed if delx = 50
 
-        ###########################################
+        self.xmx = L0  # the domain size in m
+        self.delx = 200  # grid spacing in m
+        self.nxs = int(np.round(self.xmx / self.delx)) - 1  # number of grid points
+        self.x = np.arange(0, self.xmx, self.delx)  # x array
+
+        self.nts = int(np.floor(
+            (self.tf - self.ts) / self.delt))  # number of time steps ('round' used because need nts as integer)
+
+
         # climate parameters
-        ###########################################
-        Tbar = 20.5    # average temperature at z=0 [^oC]
-        sigT = 0.9     # standard deviation of temperature [^oC]
+        self.Tbar = Tbar    # average temperature at z=0 [^oC]
+        self.sigT = sigT    # standard deviation of temperature [^oC]
         
-        Pbar = 3.0     # average value of accumulation [m yr^-1]
-        sigP = 1.0     # standard deviation of accumulation [m yr^-1]
+        self.Pbar = Pbar    # average value of accumulation [m yr^-1]
+        self.sigP = sigP    # standard deviation of accumulation [m yr^-1]
         
-        gamma = 6.5e-3  # lapse rate  [K m^-1]
-        mu = 0.5       # melt factor for ablation [m yr^-1 K^-1]
+        self.gamma = gamma  # lapse rate  [K m^-1]
+        self.mu = mu      # melt factor for ablation [m yr^-1 K^-1]
         
-        x = np.arange(0, xmx, delx)  # x array
+        
+        self.rng = default_rng()
+        
+        
+       
 
-        ###########################################
-        # define functions
-        ###########################################
-        b = (3-(4/5000)*x)  # mass balance in m/yr
+        # glacier geometry
+        self.delta = 15e3 / np.log(3)
+        self.zb = 3000 * np.exp(-self.x / self.delta)
+        self.dzbdx = np.gradient(self.zb, self.x)  # slope of glacer bed geometries.
 
-        ###########################################
-        # different glacier bed geometries
-        ###########################################
-        #zb=2000-.1*x; #bed profile in m
-        #zb =  2000.*exp(-x/4000);
-        delta = 15e3 / np.log(3)
-        zb = 3000 * np.exp(-x/delta)
-        #zb = 2000-(.1*x) + 200*(1-exp(-x/4000));
-        #zb = 1000*ones(size(x));
 
-        dzbdx = np.gradient(zb,x)  # slope of glacer bed geometries.
-        #Q = (2 * x[j] - (4/5000) * (x[j]**2)/2) * (1e-7/np.pi)  # mass flux m^2/s
-
-        # Not needed if you load your own initial profile in.
-        ###########################################
         # find zeros of flux to find glacier length
-        ###########################################
         # Note oerlemans value is c=10
-        c = 1  #equals 2tau/(rho g) plastic ice sheet constant from paterson
-        idx=np.where(np.cumsum(b)<0)  # indices where flux is less than zero
+        self.b0 = (3 - (4 / 5000) * self.x)  # mass balance in m/yr
+        self.c = 1  # equals 2tau/(rho g) plastic ice sheet constant from paterson
+        #self.c = 10
+        idx = np.where(np.cumsum(self.b0) < 0)  # indices where flux is less than zero
         idx = np.min(idx)
-        L=x[idx]  #approximate length of glacier
+        self.L = self.x[idx]  # approximate length of glacier
 
         ###########################################
         # plastic glacier initial profile
         ###########################################
-        h = np.zeros_like(x)  # zero out initial height array
-        h[1:idx-1] = np.sqrt(c * (L-x[1:idx-1])) #plastic ice profile as initial try
-        Qp = np.zeros_like(x)
-        Qm = np.zeros_like(x)
-        dhdt = np.zeros_like(x)
+        self.h = np.zeros_like(self.x, dtype='float')  # zero out initial height array
         
+        self.h[0:idx-1] = np.sqrt(self.c * (self.L - self.x[0:idx-1]))  # plastic ice profile as initial try
+
+        self.nyrs = self.tf - self.ts
+        self.Pout = np.zeros(self.nyrs)
+        self.Tout = np.zeros(self.nyrs)
+
+        self.dhdt_out = []
+        self.h_out = []
+        self.Qp_out = []
+        self.Qm_out = []
+        self.edge_out = []
+        self.t_out = []
+        self.P_out = []
+        self.T_out = []
+        self.b_out = []
+        self.dzbdx_out = []
+        self.zb_out = []
+        self.melt_out = []
         
-        nyrs = tf-ts
-        Pout=np.zeros(nyrs)
-        Tout=np.zeros(nyrs)
+    
+    # def run(self):
         ###########################################
         # begin loop over time
         ###########################################
         yr = 0
         idx_out = 0
-        
-        deltout = 5
-        nouts = round(nts/5)
-        edge_out = np.zeros(nouts)
-        t_out = np.zeros(nouts)
-        
-        for i in range(0, nts):
-        
-            t = delt*(i-1) # time in years 
+        b = np.zeros_like(self.x, dtype='float')
+        for i in np.arange(0, self.nts-1, 1):
+            
+            t = self.delt*(i)  # time in years 
             
             # define climate if it is the start of a new year
             if t == np.floor(t):
                 yr = yr+1
-                print('yr = ', str(yr))
-                P = np.ones_like(x) * (Pbar + sigP * rng.standard_normal(1))
-                T_wk = (Tbar + sigT * rng.standard_normal(1)) * np.ones_like(x) - gamma*zb
-                Pout[yr] = P[1]
-                Tout[yr] = T_wk[1]
-        #          if yr<500;
-        #              P = ones(size(x))*(3.0);
-        #              T_wk    = (17.5)*ones(size(x)) - 6.5e-3*zb;
-        #          else
-        #              P = ones(size(x))*(3.0);
-        #              T_wk    = (20.5)*ones(size(x)) - 6.5e-3*zb;
-        #          end
-                melt = np.max(mu*T_wk)
-                b = P-melt
-        #        b(yr,:)=(3-(4/5000)*x); #mass balance in m/yr
-            
-            
-        #     b(i) = P(i) - melt(i);
-        #   if t(i) >= 250 
-        #       idx = find(b>0);
-        #       b(idx) = 4*b0(idx);
-        #   end
+                print(f'yr = {yr} | timestep = {i}')
+                P = np.ones_like(self.x, dtype='float') * (self.Pbar + self.sigP * self.rng.standard_normal(1))
+                T_wk = (self.Tbar + self.sigT * self.rng.standard_normal(1)) * np.ones_like(self.x) - self.gamma*self.zb
+                # T_wk = (self.Tbar) * \
+                #        np.ones_like(self.x, dtype='float') - \
+                #        self.gamma * self.zb + \
+                #        yr * 0.01
+                
+                self.melt = np.clip(self.mu * T_wk, 0, None)
+                b = P - self.melt
+                
+
             
         ###########################################
         # begin loop over space
         ###########################################
-            for j in range(0, nxs):  # this is a kloudge -fix sometime
-                   
-               if j==1:
-                    h_ave =(h[1] + h[2])/2
-                    dhdx = (h[2] - h[1])/delx
-                    dzdx = (dzbdx[1] + dzbdx[2])/2
-                    Qp[1] = -K*(dhdx+dzdx)**3 * h_ave**5 # flux at plus half grid point
-                    Qm[1] = 0 # flux at minus half grid point
-                    dhdt[1] = b[1] - Qp[1]/(delx/2)
-               elif h[j]==0 & h[j-1]>0:  # glacier toe condition
-                    Qp[j] = 0
-                    h_ave = h[j-1]/2
-                    dhdx = -h[j-1]/delx			# correction inserted ght nov-24-04
-                    dzdx = (dzbdx[j-1] + dzbdx[j])/2
-                    Qm[j] = -K*(dhdx + dzdx)**3 * h_ave**5
-                    dhdt[j] = b[j] + Qm[j]/delx
-                    edge = j  #index of glacier toe - used for fancy plotting
-               elif h[j]<=0 & h[j-1]<=0: # beyond glacier toe - no glacier flux
-                    dhdt[j] = b[j]
-                    Qp[j] = 0
-                    Qm[j] = 0
-               else:  # within the glacier
-                   h_ave = (h[j+1] + h[j])/2
-                   dhdx = (h[j+1] - h[j])/delx		# correction inserted ght nov-24-04
-                   dzdx = (dzbdx[j] + dzbdx[j+1])/2
-                   Qp[j] = -K*(dhdx+dzdx)**3 * h_ave**5
-                   h_ave = (h[j-1] + h[j])/2
-        #           dhdx = (h(i,j-1) - h(i,j))/delx
-                   dhdx = (h[j] - h[j-1])/delx
-                   dzdx = (dzbdx[j] + dzbdx[j-1])/2
-                   Qm[j] = -K*(dhdx+dzdx)**3 * h_ave**5
-                   dhdt[j] = b[j] - (Qp[j] - Qm[j])/delx
-                   
-                   dhdt[nxs] = 0 # enforce no change at boundary
-            
+
+            self.Qp = np.zeros_like(self.x, dtype='float')  # Qp equals j+1/2 flux
+            self.Qm = np.zeros_like(self.x, dtype='float')  # Qm equals j+1/2 flux
+            self.dhdt = np.zeros_like(self.x, dtype='float')  # zero out thickness rate of change
+            for j in np.arange(0, self.nxs, 1):
+                if j == 0:
+                    h_ave = (self.h[0] + self.h[1]) / 2
+                    dhdx = (self.h[1] - self.h[0]) / (self.delx/2)
+                    dzdx = (self.dzbdx[0] + self.dzbdx[1]) / 2
+                    self.Qp[0] = -self.K * (dhdx + dzdx)**3 * h_ave**5  # flux at plus half grid point
+                    self.Qm[0] = 0  # flux at minus half grid point
+                    self.dhdt[0] = b[0] - self.Qp[0] / (self.delx / 2)
+                elif (self.h[j] <= 0) & (self.h[j - 1] > 0):  # glacier toe condition
+                    h_ave = self.h[j - 1] / 2
+                    dhdx = -self.h[j - 1] / self.delx  # correction inserted ght nov-24-04
+                    dzdx = (self.dzbdx[j - 1] + self.dzbdx[j]) / 2
+                    self.Qm[j] = -self.K * (dhdx + dzdx)**3 * h_ave**5
+                    self.Qp[j] = 0
+                    self.dhdt[j] = b[j] + self.Qm[j] / (self.delx/2)
+                    edge = j  # index of glacier toe - used for fancy plotting
+                elif (self.h[j] <= 0) & (self.h[j - 1] <= 0):  # beyond glacier toe - no glacier flux
+                    self.dhdt[j] = b[j]
+                    self.Qp[j] = 0
+                    self.Qm[j] = 0
+                else:  # within the glacier
+                    h_ave = (self.h[j + 1] + self.h[j]) / 2
+                    dhdx = (self.h[j + 1] - self.h[j]) / self.delx  # correction inserted ght nov-24-04
+                    dzdx = (self.dzbdx[j] + self.dzbdx[j + 1]) / 2
+                    self.Qp[j] = -self.K * (dhdx + dzdx)**3 * h_ave**5
+                    
+                    h_ave = (self.h[j - 1] + self.h[j]) / 2
+                    dhdx = (self.h[j] - self.h[j - 1]) / self.delx
+                    dzdx = (self.dzbdx[j] + self.dzbdx[j - 1]) / 2
+                    self.Qm[j] = -self.K * (dhdx + dzdx)**3 * h_ave**5
+                    self.dhdt[j] = b[j] - (self.Qp[j] - self.Qm[j]) / self.delx
+
+                # self.dhdt[self.nxs] = 0  # enforce no change at boundary
             
             # end of loop over space
-            h = np.max(h + dhdt*delt)
+            self.h = self.h + self.dhdt*self.delt
+            self.h = np.clip(self.h, a_min=0, a_max=None)
+
+            # end of loop over time
+            # np.argmin(np.gradient(res.h.to_numpy())[1], axis=1)
+            edge = np.argmin(np.gradient(self.h)) #* self.delx
+            self.edge_out.append(edge)
+            self.dhdt_out.append(self.dhdt)
+            self.h_out.append(self.h)
+            self.Qp_out.append(self.Qp)
+            self.Qm_out.append(self.Qm)
+            self.P_out.append(P)
+            self.T_out.append(T_wk)
+            self.b_out.append(b)
+            self.dzbdx_out.append(self.dzbdx)
+            self.zb_out.append(self.zb)
+            self.melt_out.append(self.melt)
         
-        ###########################################
-        # plot glacier every so often
-        # save h , and terminus position
-        ###########################################
-            if t/20 == np.floor(t/20):
-                idx_out = idx_out+1
-                
-                edge_out[idx_out] = edge 
-                t_out[idx_out] = t
-                edge_out[idx_out] = delx*np.max(np.where(h>10))
-                
-                
-    
-    def run(self, years, dt, bt):
-        self.dt = dt
-        self.bt = bt
-        self.years = years
-        ts = np.array(range(0, self.years, self.dt))
-        self.ts = ts
-        slope_pct = self.dzdx
         
-        self.h = np.zeros_like(ts, dtype='float')
-        self.F = np.zeros_like(ts, dtype='float')
-        self.L = np.zeros_like(ts, dtype='float')
-        
-        for t in ts:
-            if t == ts[0]:
-                #self.h[0] = self.H
-                #self.L[0] = self.L0
-                continue
-                     
-            self.h[t] = (1 - dt)*self.h[t-dt] + self.F[t-dt] + self.bt[t] 
-            self.F[t] = self.rho**3 * self.g**3 * self.h[t]**3 * self.dzdx**3 * (self.f_d * self.h[t] + self.f_s/self.h[t])   # 1b
-            self.L[t] = self.L[t-dt] + self.F[t-dt]*dt*(1-slope_pct)
+        # collect results
+        res = xr.Dataset(data_vars=dict(
+            edge=(['t'], np.array(self.edge_out)),
+            dzbdx=(['t', 'x'], np.vstack(self.dzbdx_out)),
+            zb=(['t', 'x'], np.vstack(self.zb_out)),
+            dhdt=(['t', 'x'], np.vstack(self.dhdt_out)),
+            h=(['t', 'x'], np.vstack(self.h_out)),
+            Qp=(['t', 'x'], np.vstack(self.Qp_out)),
+            Qm=(['t', 'x'], np.vstack(self.Qm_out)),
+            P=(['t', 'x'], np.vstack(self.P_out)),
+            T=(['t', 'x'], np.vstack(self.T_out)),
+            b=(['t', 'x'], np.vstack(self.b_out)),
+            melt=(['t', 'x'], np.vstack(self.melt_out)),
+        ),
+        coords=dict(
+            x=('x', self.x),
+            t=('t', np.arange(1, self.nts, 1)),
             
+        ),
+        attrs=dict(
+            
+        ))
+
+        
+        #%%
+        fig, ax = plt.subplots(3, 4, figsize=(12, 8))
+        
+        
+        im = ax[0, 0].imshow(res.h.to_numpy(), vmin=-1, vmax=300)
+        ax[0,0].set_xlabel('h')
+        plt.colorbar(im, ax=ax[0, 0])
+
+        im = ax[1, 0].imshow(res.T.to_numpy())
+        ax[1, 0].set_xlabel('T')
+        plt.colorbar(im, ax=ax[1, 0])
+        
+        im = ax[2, 0].imshow(res.melt.to_numpy())
+        ax[2, 0].set_xlabel('melt')
+        plt.colorbar(im, ax=ax[2, 0])
+        
+        
+        # col 1
+        im = ax[0, 1].imshow(res.Qp.to_numpy(), vmin=0, vmax=1500)
+        ax[0, 1].set_xlabel('Qp')
+        plt.colorbar(im, ax=ax[0, 1])
+
+        im = ax[1, 1].imshow(res.Qm.to_numpy(), vmin=0, vmax=1500)
+        ax[1, 1].set_xlabel('Qm')
+        plt.colorbar(im, ax=ax[1, 1])
+
+        im = ax[2, 1].imshow(np.gradient(res.h.to_numpy())[0], cmap='bwr_r', norm=mpl.colors.TwoSlopeNorm(vcenter=0, vmin=-0.25, vmax=0.25))
+        ax[2,1].set_xlabel('gradient(h)[0]')
+        plt.colorbar(im, ax=ax[2, 1])
+        
+        
+        # col 2
+        im = ax[0, 2].imshow(res.dhdt.to_numpy(), cmap='bwr_r', norm=mpl.colors.TwoSlopeNorm(vcenter=0, vmin=-5, vmax=5))
+        ax[0, 2].set_xlabel('dhdt')
+        plt.colorbar(im, ax=ax[0, 2])
+
+        im = ax[1, 2].imshow(res.b.to_numpy(), cmap='bwr_r', norm=mpl.colors.CenteredNorm(vcenter=0))
+        ax[1,2].set_xlabel('b')
+        plt.colorbar(im, ax=ax[1, 2])
+
+        im = ax[2, 2].imshow(res.P.to_numpy())
+        ax[2,2].set_xlabel('P')
+        plt.colorbar(im, ax=ax[2, 2])
+
+
+        # col 3
+        im = ax[0, 3].imshow(np.gradient(res.h.to_numpy())[1], cmap='bwr_r',
+                             norm=mpl.colors.TwoSlopeNorm(vcenter=0))
+        ax[0,3].set_xlabel('gradient(h)[1]')
+        plt.colorbar(im, ax=ax[0,3])
+
+        im = ax[1, 3].plot(res.edge.to_series())
+        ax[1, 3].set_xlabel('edge')
+
+
+        [axis.set_aspect(0.025) for axis in ax.flatten()]
+        ax[1, 3].set_aspect(20)
+        plt.tight_layout()
+        
+        fig.show()
+        
+        
         
         
 
