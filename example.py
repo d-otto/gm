@@ -4,26 +4,24 @@ import numpy as np
 import lgm
 
 
-# Example values for Mt. Baker, WA.
+# Example of flowline model specification
 params = dict(
     ## glacier model parameters
-    mu = 0.8,  # melt factor [m yr**-1 K**-1]
-    
-    
-     
-    W = 500,  # characteristic width of the glacier tongue [m]. 
-    h0 = 44.4186,  # characteristic ice thickness near the terminus [m]
-    gamma = 6.5e-3,  # assumed surface lapse rate [K m**-1] 
-    
+    mu=0.8,  # melt factor [m yr**-1 K**-1]
+    W=1000,  # characteristic width of the glacier tongue [m]. 
+    h0=100,  # characteristic ice thickness near the terminus [m]
+    gamma=6.5e-3,  # assumed surface lapse rate [K m**-1] 
+    t0=0,  # start time, yrs
+    t1=100,  # end time, yrs
+    delx=200,  # grid spacing
     # natural climate variability - for temperature and precipitation forcing
     Tbar=20,
     sigT=0.9,  # std. dev. of melt-season temperature variability [m yr**-1
     Pbar=2.0,
     sigP=1.0, # std. dev. of accumulation variability [m yr**-1]
     dzdx=0.4,
-    L0=16000,
+    L0=10000,  # model domain
 )
-
 model = lgm.flowline(**params)
 
 
