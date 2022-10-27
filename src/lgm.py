@@ -768,7 +768,7 @@ class flowline2d:
     def __init__(self, x_gr, zb_gr, x_geom, w_geom, x_init, h_init, temp,
                  Trand=None, Prand=None,
                  t0=0, n=3, gamma=6.5e-3, mu=0.65, g=9.81, rho=916.8, f_d=1.9e-24, f_s=5.7e-20, sigT=0.8, sigP=1.0,
-                 T0=14.70, fd = 1.9e-24, fs = 5.7e-20, xmx=19000, delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True):
+                 T0=14.70, fd = 1.9e-24, fs = 5.7e-20, xmx=19000, delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
         """2d flowline model
 
         This module demonstrates documentation as specified by the `NumPy
@@ -825,6 +825,10 @@ class flowline2d:
             Ending time yr
         dt_plot : int
             Plotting interval yr
+        rt_plot : bool
+            Whether there should be real time plotting while the model is running.
+        xlim0 : float
+            Left limit for plots (yrs)
     
     
         Returns
@@ -928,17 +932,14 @@ class flowline2d:
         # #-----------------
         # #define parameters
         # #-----------------
-        fd = fd * np.pi * 1e7
-        fs = fs * np.pi * 1e7  # convert from seconds to years
-
-        # delx = 100  #grid spacing in m
         nxs = round(xmx / delx)  # number of grid points
         nts = round(np.floor((tf - ts) / delt))  # number of time steps ('round' used because need nts as integer)
         nyrs = tf - ts
-
         x = np.arange(0, xmx, delx)  # x array
-
-
+        
+        fd = fd * np.pi * 1e7
+        fs = fs * np.pi * 1e7  # convert from seconds to years
+        
         # ---------------------------------
         # different glacier bed geometries
         # ---------------------------------
@@ -976,6 +977,7 @@ class flowline2d:
         edge_out = np.full(nouts, fill_value=np.nan, dtype='float')
         t_out = np.full(nouts, fill_value=np.nan, dtype='float')
         T_out = np.full(nouts, fill_value=np.nan, dtype='float')
+        P_out = np.full(nouts, fill_value=np.nan, dtype='float')
         bal_out = np.full(nouts, fill_value=np.nan, dtype='float')
         ela_out = np.full(nouts, fill_value=np.nan, dtype='float')
         h_out = np.full((nouts, nxs), fill_value=np.nan, dtype='float')
@@ -990,19 +992,13 @@ class flowline2d:
                 yr = yr + 1
                 print(f'yr = {yr}')
                 P = np.ones(x.size) * (5.0 + 0.0 * Pp[yr])
-                #         T_wk    = (25.25+0*Tp(yr))*ones(size(x)) - gamma*(zb+h)
-
-                # choose this for constant pre-industrial climate
-                #         T_wk    = (13.20 + 0.0*Tp(yr))*ones(size(x)) - gamma*(zb+h)
-                # choose this to allow for a LIA cooling
-                # millennial trend
                 T_wk = (T0 + 1.0 * Tp[yr]) * np.ones(x.size) - gamma * (zb + h)
                 T_wk = T_wk + temp(yr)
-
-                #           end
                 melt = np.core.umath.clip(mu * T_wk, 0, 100000)
                 b = P - melt
 
+            # loop over space (solve SIA)
+            # this is the entire model, really
             h, edge = space_loop(h, b)
 
             # ----------------------------
@@ -1011,49 +1007,41 @@ class flowline2d:
             # ----------------------------
 
             if t / deltout == np.floor(t / deltout):
-                T_out[idx_out] = T_wk[1] - 3.2
+                # Save outputs
+                T_out[idx_out] = T_wk[0] - 3.2  # temp at the top of the glacier
+                P_out[idx_out] = P_wk[0]
                 t_out[idx_out] = t
                 edge_out[idx_out] = edge * delx
                 h_out[idx_out, :] = h
                 # edge_out[idx_out] = delx * max(h[h > 10])
-
                 bal = b * w * delx  # mass added in a given cell units are m^3 yr^-1
                 bal_out[idx_out] = np.trapz(
                     bal[:edge])  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
                 ela_idx = np.abs(b).argmin()
                 ela_out[idx_out] = zb[ela_idx] + h[ela_idx]
+                
                 idx_out = idx_out + 1
             if ((t / dt_plot == np.floor(t / dt_plot)) | (i == nts - 1)) & rt_plot:  # force plotting on the last time step
-                #         set(gcf,'Units','normalized')
-
+                print('outputting')
                 pad = 10
                 x1 = x[:edge + pad]
                 z0 = zb[:edge + pad]
                 z1 = zb[:edge + pad] + h[:edge + pad]
-
+                
                 try:
                     ax[0, 1].collections[0].remove()  # remove the glacier profile before redrawing
                 except:
                     pass
                 poly = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='lightblue')
                 ax[0, 1].plot(x1 / 1000, z0, c='black', lw=2, )
-
-                # h3 = text('position',[0.77, 0.92],'string',time,'units','normalized','fontsize',16)
-                print('outputting')
-                #        hout(idx_out,:) = h
-
                 ax[1, 0].plot(t_out, T_out, c='blue', lw=0.25)
-                ax[1, 1].plot(t_out, scipy.ndimage.uniform_filter1d(edge_out, 20, mode='mirror') / 1000, c='black',
-                              lw=2)
+                ax[1, 1].plot(t_out, scipy.ndimage.uniform_filter1d(edge_out, 20, mode='mirror') / 1000, c='black', lw=2)
                 ax[2, 0].plot(t_out, bal_out / (edge_out * 500), c='blue', lw=0.25)
-                ax[2, 1].plot(t_out,
-                              scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'),
-                              c='blue', lw=2)
-
+                ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
+                
+                # update the plot
                 fig.canvas.flush_events()
                 fig.canvas.draw()
-
-                # plt.tight_layout()
 
                 # -----------------------------------------
                 # end loop over time
@@ -1065,12 +1053,9 @@ class flowline2d:
             ax[1, 0].plot(t_out, scipy.ndimage.uniform_filter1d(T_out, 20, mode='mirror'), c='blue', lw=2)
             ax[1, 0].set_xlim(xlim0, tf)
             ax[1, 1].set_xlim(xlim0, tf)
-            # ax[1, 1].set_ylim(edge_out.min()/1000 - 1, edge_out.max()/1000 + 1)
-            ax[2, 0].plot(t_out, scipy.ndimage.uniform_filter1d(bal_out / (edge_out * 500), 20, mode='mirror'), c='blue',
-                          lw=2)
+            ax[2, 0].plot(t_out, scipy.ndimage.uniform_filter1d(bal_out / (edge_out * 500), 20, mode='mirror'), c='blue', lw=2)
             ax[2, 0].set_xlim(xlim0, tf)
-            ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'),
-                          c='blue', lw=2)
+            ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
             ax[2, 1].set_xlim(xlim0, tf)
             # ax[2, 1].set_ylim(-80, 80)
     
@@ -1094,6 +1079,7 @@ class flowline2d:
         
         # collect output
         self.T = T_out
+        self.P = P_out
         self.t = t_out + ts
         self.edge = edge_out
         self.bal = bal_out
@@ -1111,6 +1097,8 @@ class flowline2d:
     def plot(self, xlim0=1500):
         """This is a docstring
         
+        This is the longer portion of the docstring.
+        
         Parameters
         ----------------
         xlim0 : float
@@ -1118,7 +1106,8 @@ class flowline2d:
             
         Returns
         ----------------
-        fig
+        fig : Figure
+            It's a figure??
         
         """
 
@@ -1203,7 +1192,7 @@ class flowline2d:
 
     def to_csv(self, fp):
         # save output?
-        output = pd.DataFrame().from_dict(dict(t=self.t, T=self.T, edge=self.edge, bal=self.bal, ela=self.ela))
+        output = pd.DataFrame().from_dict(dict(t=self.t, T=self.T, P=self.P, edge=self.edge, bal=self.bal, ela=self.ela))
         output.to_csv(fp, index=False)
         
         return None
