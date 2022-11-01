@@ -18,6 +18,7 @@ import scipy.ndimage
 from numpy.random import default_rng
 import xarray as xr
 import copy
+import pickle
 
 #%%
 
@@ -764,11 +765,50 @@ class flowline:
 
 ###############################################################################            
 class flowline2d:
+    def _init_plot(self):
+        fig = plt.figure(figsize=(12, 10), dpi=200)
+        gs = gridspec.GridSpec(4, 2, figure=fig, height_ratios=(1, 1, 1, 1))
+        ax = np.empty((4, 2), dtype='object')
+        plt.show(block=False)
 
-    def __init__(self, x_gr, zb_gr, x_geom, w_geom, x_init, h_init, temp,
+        ax[0, 0] = fig.add_subplot(gs[0, 0])
+        ax[0, 0].set_xlabel('Time (years)')
+        ax[0, 0].set_ylabel('Glacier Area ($km^2$)')
+
+        ax[1, 0] = fig.add_subplot(gs[1, 0])
+        ax[1, 0].set_xlabel('Time (years)')
+        ax[1, 0].set_ylabel('Equilibrium Line Altitude (m)')
+
+        ax[0, 1] = fig.add_subplot(gs[0:2, 1])
+        ax[0, 1].set_xlabel('Distance (km)')
+        ax[0, 1].set_ylabel('Elevation (m)')
+
+        ax[2, 0] = fig.add_subplot(gs[2, 0])
+        ax[2, 0].set_ylabel('T ($^o$C)')
+
+        ax[2, 1] = fig.add_subplot(gs[2, 1])
+        ax[2, 1].set_ylabel('L (km)')
+
+        ax[3, 0] = fig.add_subplot(gs[3, 0])
+        ax[3, 0].set_ylabel('Bal (m $yr^{-1}$)')
+        ax[3, 0].set_xlabel('Time (years)')
+
+        ax[3, 1] = fig.add_subplot(gs[3, 1])
+        ax[3, 1].set_xlabel('Time (years)')
+        ax[3, 1].set_ylabel('Cum. bal. (m)')
+
+        for axis in ax.ravel():
+            if axis is not None:  # this handles gridspec col/rowspans > 1
+                axis.grid(axis='both', alpha=0.5)
+                axis.set_axisbelow(True)
+        plt.tight_layout()
+
+        return fig, ax
+
+    def __init__(self, x_gr, zb_gr, x_geom, w_geom, x_init, h_init, temp, xmx,
                  Trand=None, Prand=None,
                  t0=0, n=3, gamma=6.5e-3, mu=0.65, g=9.81, rho=916.8, f_d=1.9e-24, f_s=5.7e-20, sigT=0.8, sigP=1.0,
-                 T0=14.70, fd = 1.9e-24, fs = 5.7e-20, xmx=19000, delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
+                 T0=14.70, P0=5, fd = 1.9e-24, fs = 5.7e-20,  delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
         """2d flowline model
 
         This module demonstrates documentation as specified by the `NumPy
@@ -890,40 +930,6 @@ class flowline2d:
             # ----------------------------------------
             h = np.clip(h + dhdt * delt, 0, 10000)
             return h, edge
-        def init_plot():
-            fig = plt.figure(figsize=(12, 10), dpi=100)
-            gs = gridspec.GridSpec(3, 2, figure=fig, height_ratios=(2, 1, 1))
-            ax = np.empty((3, 2), dtype='object')
-            plt.show(block=False)
-
-            ax[0, 0] = fig.add_subplot(gs[0, 0])
-            ax[0, 0].set_xlabel('Time (years)')
-            ax[0, 0].set_ylabel('Elevation (m)')
-
-            ax[0, 1] = fig.add_subplot(gs[0, 1])
-            ax[0, 1].set_xlabel('Distance (km)')
-            ax[0, 1].set_ylabel('Elevation (m)')
-
-            ax[1, 0] = fig.add_subplot(gs[1, 0])
-            ax[1, 0].set_ylabel('T ($^o$C)')
-
-            ax[1, 1] = fig.add_subplot(gs[1, 1])
-            ax[1, 1].set_ylabel('L (km)')
-
-            ax[2, 0] = fig.add_subplot(gs[2, 0])
-            ax[2, 0].set_ylabel('Bal (m $yr^{-1}$)')
-            ax[2, 0].set_xlabel('Time (years)')
-
-            ax[2, 1] = fig.add_subplot(gs[2, 1])
-            ax[2, 1].set_xlabel('Time (years)')
-            ax[2, 1].set_ylabel('Cum. bal. (m)')
-
-            for axis in ax.ravel():
-                axis.grid(axis='both', alpha=0.5)
-                axis.set_axisbelow(True)
-            plt.tight_layout()
-            
-            return fig, ax
         
         if rt_plot:
             plt.ioff()
@@ -965,6 +971,8 @@ class flowline2d:
         # initialize climate forcing
         Tp = sigT * Trand[0:nyrs + 1]
         Pp = sigP * Prand[0:nyrs + 1]  # initialize climate forcing
+        # Tp[:] = 0  # todo: testing ,remove
+        # Pp[:] = 0  # todo: testing ,remove
         Tp[0:49] = 0  # todo: turn this into an argument
 
         # -----------------------------------------
@@ -980,10 +988,11 @@ class flowline2d:
         P_out = np.full(nouts, fill_value=np.nan, dtype='float')
         bal_out = np.full(nouts, fill_value=np.nan, dtype='float')
         ela_out = np.full(nouts, fill_value=np.nan, dtype='float')
+        area_out = np.full(nouts, fill_value=np.nan, dtype='float')
         h_out = np.full((nouts, nxs), fill_value=np.nan, dtype='float')
         
         if rt_plot:
-            fig, ax = init_plot()
+            fig, ax = self._init_plot()
 
         for i in range(0, nts):
             t = delt * i  # time in years 
@@ -991,8 +1000,8 @@ class flowline2d:
             if (t == np.floor(t)):
                 yr = yr + 1
                 print(f'yr = {yr}')
-                P = np.ones(x.size) * (5.0 + 0.0 * Pp[yr])
-                T_wk = (T0 + 1.0 * Tp[yr]) * np.ones(x.size) - gamma * (zb + h)
+                P = np.ones(x.size) * (P0 + 1 * Pp[yr])
+                T_wk = (T0 + 1 * Tp[yr]) * np.ones(x.size) - gamma * (zb + h)
                 T_wk = T_wk + temp(yr)
                 melt = np.core.umath.clip(mu * T_wk, 0, 100000)
                 b = P - melt
@@ -1007,12 +1016,15 @@ class flowline2d:
             # ----------------------------
 
             if t / deltout == np.floor(t / deltout):
+                area = np.trapz(w[:edge], dx=delx)
+                
                 # Save outputs
-                T_out[idx_out] = T_wk[0] - 3.2  # temp at the top of the glacier
-                P_out[idx_out] = P_wk[0]
+                T_out[idx_out] = T_wk[0] - 3.2  # temp at the top of the glacier todo: verify this
+                P_out[idx_out] = P[0]
                 t_out[idx_out] = t
                 edge_out[idx_out] = edge * delx
                 h_out[idx_out, :] = h
+                area_out[idx_out] = area
                 # edge_out[idx_out] = delx * max(h[h > 10])
                 bal = b * w * delx  # mass added in a given cell units are m^3 yr^-1
                 bal_out[idx_out] = np.trapz(
@@ -1034,10 +1046,12 @@ class flowline2d:
                     pass
                 poly = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='lightblue')
                 ax[0, 1].plot(x1 / 1000, z0, c='black', lw=2, )
-                ax[1, 0].plot(t_out, T_out, c='blue', lw=0.25)
-                ax[1, 1].plot(t_out, scipy.ndimage.uniform_filter1d(edge_out, 20, mode='mirror') / 1000, c='black', lw=2)
-                ax[2, 0].plot(t_out, bal_out / (edge_out * 500), c='blue', lw=0.25)
-                ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
+                ax[0, 0].plot(t_out, scipy.ndimage.uniform_filter1d(area_out/1e6, 20, mode='mirror'), c='black')
+                ax[1, 0].plot(t_out, scipy.ndimage.uniform_filter1d(ela_out, 20, mode='mirror'), c='black')
+                ax[2, 0].plot(t_out, T_out, c='blue', lw=0.25)
+                ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(edge_out, 20, mode='mirror') / 1000, c='black', lw=2)
+                ax[3, 0].plot(t_out, bal_out / (edge_out * 500), c='blue', lw=0.25)
+                ax[3, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
                 
                 # update the plot
                 fig.canvas.flush_events()
@@ -1047,34 +1061,16 @@ class flowline2d:
                 # end loop over time
                 # -----------------------------------------
         if rt_plot:
-            ax[0, 0].plot(t_out, scipy.ndimage.uniform_filter1d(ela_out, 20, mode='mirror'), c='black')
-            ax[0, 0].set_xlim(xlim0, tf)
             ax[0, 1].set_xlim(0, x1.max() / 1000 * 1.1)
-            ax[1, 0].plot(t_out, scipy.ndimage.uniform_filter1d(T_out, 20, mode='mirror'), c='blue', lw=2)
             ax[1, 0].set_xlim(xlim0, tf)
-            ax[1, 1].set_xlim(xlim0, tf)
-            ax[2, 0].plot(t_out, scipy.ndimage.uniform_filter1d(bal_out / (edge_out * 500), 20, mode='mirror'), c='blue', lw=2)
+            ax[2, 0].plot(t_out, scipy.ndimage.uniform_filter1d(T_out, 20, mode='mirror'), c='blue', lw=2)
             ax[2, 0].set_xlim(xlim0, tf)
-            ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
             ax[2, 1].set_xlim(xlim0, tf)
-            # ax[2, 1].set_ylim(-80, 80)
-    
-            # plot extras
-            anth = pd.read_csv('flowline2d_output_width_ANTH.csv')
-            anth['T_sm'] = scipy.ndimage.uniform_filter1d(anth['T'], 20, mode='mirror')
-            anth['edge_sm'] = scipy.ndimage.uniform_filter1d(anth.edge, 20, mode='mirror') / 1000
-            anth['bal_sm'] = scipy.ndimage.uniform_filter1d(anth.bal / (anth.edge * 500), 20, mode='mirror')
-            anth['cumbal_sm'] = scipy.ndimage.uniform_filter1d(np.cumsum(anth.bal / (anth.edge * 500)), 20, mode='mirror')
-            anth = anth.iloc[1850:]
-            ax[1, 0].plot(anth.t, anth['T_sm'], c='red', lw=2)
-            ax[1, 0].plot(anth.t, anth['T'], c='red', lw=0.25)
-            ax[1, 1].plot(anth.t, anth['edge_sm'], c='black', lw=2, ls='dashed')
-            ax[2, 0].plot(anth.t, anth['bal_sm'], c='red', lw=2)
-            ax[2, 0].plot(anth.t, anth['bal'] / (anth['edge'] * 500), c='red', lw=0.25)
-            ax[2, 1].plot(anth.t, anth['cumbal_sm'], c='red', lw=2)
-    
+            ax[3, 0].plot(t_out, scipy.ndimage.uniform_filter1d(bal_out / area_out, 20, mode='mirror'), c='blue', lw=2)
+            ax[3, 0].set_xlim(xlim0, tf)
+            ax[3, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / area_out), 20, mode='mirror'), c='blue', lw=2)
+            ax[3, 1].set_xlim(xlim0, tf)
             plt.draw()
-            plt.savefig(fig_output_name)
             
         
         # collect output
@@ -1091,10 +1087,11 @@ class flowline2d:
         self.tf = tf
         self.nxs = nxs
         self.delx = delx
+        self.area = area_out
         
         return None
         
-    def plot(self, xlim0=1500):
+    def plot(self, xlim0=1500, compare_fp=None):
         """This is a docstring
         
         This is the longer portion of the docstring.
@@ -1110,89 +1107,72 @@ class flowline2d:
             It's a figure??
         
         """
-
-        pad = 10
-        edge_idx = int(self.edge[-1]/self.delx)
-        x1 = self.x[:(edge_idx + pad)]
-        z0 = self.zb[:(edge_idx + pad)]
-        z1 = self.zb[:(edge_idx + pad)] + self.h[-1, :(edge_idx + pad)]
+        pad=10
+        pedge = int(self.edge[-1]/self.delx + pad)
+        self.pedge = pedge
+        x1 = self.x[:pedge]
+        z0 = self.zb[:pedge]
+        z1 = z0 + self.h[-1, :pedge]
         
-        fig = plt.figure(figsize=(12, 10), dpi=100)
-        gs = gridspec.GridSpec(3, 2, figure=fig, height_ratios=(2, 1, 1))
-        ax = np.empty((3, 2), dtype='object')
-
-        ax[0, 0] = fig.add_subplot(gs[0, 0])
-        ax[0, 0].set_xlabel('Time (years)')
-        ax[0, 0].set_ylabel('Elevation (m)')
-
-        ax[0, 1] = fig.add_subplot(gs[0, 1])
-        ax[0, 1].set_xlabel('Distance (km)')
-        ax[0, 1].set_ylabel('Elevation (m)')
-
-        ax[1, 0] = fig.add_subplot(gs[1, 0])
-        ax[1, 0].set_ylabel('T ($^o$C)')
-
-        ax[1, 1] = fig.add_subplot(gs[1, 1])
-        ax[1, 1].set_ylabel('L (km)')
-
-        ax[2, 0] = fig.add_subplot(gs[2, 0])
-        ax[2, 0].set_ylabel('Bal (m $yr^{-1}$)')
-        ax[2, 0].set_xlabel('Time (years)')
-
-        ax[2, 1] = fig.add_subplot(gs[2, 1])
-        ax[2, 1].set_xlabel('Time (years)')
-        ax[2, 1].set_ylabel('Cum. bal. (m)')
-
-        for axis in ax.ravel():
-            axis.grid(axis='both', alpha=0.5)
-            axis.set_axisbelow(True)
-        plt.tight_layout()
-
+        fig, ax = self._init_plot()
         poly = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='lightblue')
         ax[0, 1].plot(x1 / 1000, z0, c='black', lw=2, )
-
-        ax[1, 0].plot(self.t, self.T, c='blue', lw=0.25)
-        ax[1, 1].plot(self.t, scipy.ndimage.uniform_filter1d(self.edge, 20, mode='mirror') / 1000, c='black', lw=2)
-        ax[2, 0].plot(self.t, self.bal / (self.edge * 500), c='blue', lw=0.25)
-        ax[2, 1].plot(self.t, scipy.ndimage.uniform_filter1d(np.cumsum(self.bal / (self.edge * 500)), 20, mode='mirror'), c='blue', lw=2)
-        
-        ax[0, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.ela, 20, mode='mirror'), c='black')
-        ax[0, 0].set_xlim(xlim0, self.tf)
-        
-        ax[0, 1].set_xlim(0, x1.max() / 1000 * 1.1)
-        ax[1, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.T, 20, mode='mirror'), c='blue', lw=2)
-        
+        ax[0, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.area/1e6, 20, mode='mirror'), c='black')
+        ax[1, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.ela, 20, mode='mirror'), c='blue')
         ax[1, 0].set_xlim(xlim0, self.tf)
-        ax[1, 1].set_xlim(xlim0, self.tf)
-        
-        # ax[1, 1].set_ylim(self.edge.min()/1000 - 1, self.edge.max()/1000 + 1)
-        
-        ax[2, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.bal / (self.edge * 500), 20, mode='mirror'), c='blue', lw=2)
+        ax[2, 1].set_xlim(0, x1.max() / 1000 * 1.1)
+        ax[2, 0].plot(self.t, self.T, c='blue', lw=0.25)
+        ax[2, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.T, 20, mode='mirror'), c='blue', lw=2)
         ax[2, 0].set_xlim(xlim0, self.tf)
-        ax[2, 1].plot(self.t, scipy.ndimage.uniform_filter1d(np.cumsum(self.bal / (self.edge * 500)), 20, mode='mirror'), c='blue', lw=2)
+        ax[2, 1].plot(self.t, scipy.ndimage.uniform_filter1d(self.edge, 20, mode='mirror') / 1000, c='black', lw=2)
         ax[2, 1].set_xlim(xlim0, self.tf)
-        # ax[2, 1].set_ylim(-80, 80)
+        ax[3, 0].plot(self.t, self.bal / self.area, c='blue', lw=0.25)
+        ax[3, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.bal / self.area, 20, mode='mirror'), c='blue', lw=2)
+        ax[3, 0].set_xlim(xlim0, self.tf)
+        ax[3, 1].plot(self.t, scipy.ndimage.uniform_filter1d(np.cumsum(self.bal / self.area), 20, mode='mirror'), c='blue', lw=2)
+        ax[3, 1].plot(self.t, scipy.ndimage.uniform_filter1d(np.cumsum(self.bal / self.area), 20, mode='mirror'), c='blue', lw=2)
+        ax[3, 1].set_xlim(xlim0, self.tf)
 
         # plot extras
-        anth = pd.read_csv('flowline2d_output_width_ANTH.csv')
-        anth['T_sm'] = scipy.ndimage.uniform_filter1d(anth['T'], 20, mode='mirror')
-        anth['edge_sm'] = scipy.ndimage.uniform_filter1d(anth.edge, 20, mode='mirror') / 1000
-        anth['bal_sm'] = scipy.ndimage.uniform_filter1d(anth.bal / (anth.edge * 500), 20, mode='mirror')
-        anth['cumbal_sm'] = scipy.ndimage.uniform_filter1d(np.cumsum(anth.bal / (anth.edge * 500)), 20, mode='mirror')
-        anth = anth.iloc[1850:]
-        ax[1, 0].plot(anth.t, anth['T_sm'], c='red', lw=2)
-        ax[1, 0].plot(anth.t, anth['T'], c='red', lw=0.25)
-        ax[1, 1].plot(anth.t, anth['edge_sm'], c='black', lw=2, ls='dashed')
-        ax[2, 0].plot(anth.t, anth['bal_sm'], c='red', lw=2)
-        ax[2, 0].plot(anth.t, anth['bal'] / (anth['edge'] * 500), c='red', lw=0.25)
-        ax[2, 1].plot(anth.t, anth['cumbal_sm'], c='red', lw=2)
-        fig.show()
+        if compare_fp:
+            with open(compare_fp, 'rb') as f:
+                anth = pickle.load(f)
+            #anth = pd.DataFrame().from_dict(anth)
+            anth_h = anth.pop('h')
+            anth = pd.DataFrame.from_dict(anth)
+            self.anth = anth
+            
+            pad=10
+            pedge = int(anth['edge'].iloc[-1]/self.delx + pad)
+            self.pedge = pedge
+            x1 = self.x[:pedge]
+            z0 = self.zb[:pedge]
+            z1 = z0 + anth_h[-1][:pedge]
+    
+            poly2 = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='none', ec='lightblue', hatch='....')
+            
+            anth['T_sm'] = scipy.ndimage.uniform_filter1d(anth['T'], 20, mode='mirror')
+            anth['edge_sm'] = scipy.ndimage.uniform_filter1d(anth['edge'], 20, mode='mirror') / 1000
+            anth['bal_sm'] = scipy.ndimage.uniform_filter1d(anth['bal'] / anth['area'], 20, mode='mirror')
+            anth['cumbal_sm'] = scipy.ndimage.uniform_filter1d(np.cumsum(anth['bal'] / anth['area']), 20, mode='mirror')
+            anth['ela_sm'] = scipy.ndimage.uniform_filter1d(anth['ela'], 20, mode='mirror')
+            anth = anth.iloc[1850:]
+            ax[0, 0].plot(anth.t, anth['area']/1e6, c='black', lw=2, ls='dashed')
+            ax[1, 0].plot(anth.t, anth['ela_sm'], c='red', lw=2,)
+            ax[2, 0].plot(anth.t, anth['T_sm'], c='red', lw=2)
+            ax[2, 0].plot(anth.t, anth['T'], c='red', lw=0.25)
+            ax[2, 1].plot(anth.t, anth['edge_sm'], c='black', lw=2, ls='dashed')
+            ax[3, 0].plot(anth.t, anth['bal_sm'], c='red', lw=2)
+            ax[3, 0].plot(anth.t, anth['bal'] / anth.area, c='red', lw=0.25)
+            ax[3, 1].plot(anth.t, anth['cumbal_sm'], c='red', lw=2)
+            fig.show()
         
         return fig
 
-    def to_csv(self, fp):
+    def to_pickle(self, fp):
         # save output?
-        output = pd.DataFrame().from_dict(dict(t=self.t, T=self.T, P=self.P, edge=self.edge, bal=self.bal, ela=self.ela))
-        output.to_csv(fp, index=False)
+        output = dict(t=self.t, T=self.T, P=self.P, edge=self.edge, bal=self.bal, ela=self.ela, area=self.area, h=self.h)
+        with open(fp, 'wb') as f:
+            pickle.dump(output, f)
         
         return None
