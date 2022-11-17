@@ -19,6 +19,7 @@ from numpy.random import default_rng
 import xarray as xr
 import copy
 import pickle
+import gzip
 
 #%%
 
@@ -806,7 +807,7 @@ class flowline2d:
         return fig, ax
 
     def __init__(self, x_gr, zb_gr, x_geom, w_geom, x_init, h_init, temp, xmx,
-                 Trand=None, Prand=None,
+                 Trand=None, Prand=None, t_stab=50,
                  t0=0, n=3, gamma=6.5e-3, mu=0.65, g=9.81, rho=916.8, f_d=1.9e-24, f_s=5.7e-20, sigT=0.8, sigP=1.0,
                  T0=14.70, P0=5, fd = 1.9e-24, fs = 5.7e-20,  delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
         """2d flowline model
@@ -911,7 +912,7 @@ class flowline2d:
                     dhdt[j] = b[j] + Qm[j] / delx - (Qp[j] + Qm[j]) / (2 * w[j]) * dwdx[j]
                     edge = j  # index of glacier toe - used for fancy plotting
                 elif (h[j] <= 0) & (h[j - 1] <= 0):  # beyond glacier toe - no glacier flux
-                    dhdt[j] = b[j]
+                    dhdt[j] = b[j]  # todo: verify that this is actually being evaluated
                     Qp[j] = 0
                     Qm[j] = 0
                 else:  # within the glacier
@@ -953,7 +954,7 @@ class flowline2d:
         zb = zb(x)
         w = interp1d(x_geom, w_geom)
         w = w(x)
-        w = np.clip(w, 600, None)
+        w = np.clip(w, 700, None)
         # w = 500 * np.ones(x.size)  # no width data in this version
         dzbdx = np.gradient(zb, x)  # slope of glacer bed geometries.
         dwdx = np.gradient(w, x)
@@ -973,7 +974,7 @@ class flowline2d:
         Pp = sigP * Prand[0:nyrs + 1]  # initialize climate forcing
         # Tp[:] = 0  # todo: testing ,remove
         # Pp[:] = 0  # todo: testing ,remove
-        Tp[0:49] = 0  # todo: turn this into an argument
+        Tp[:t_stab] = 0  # todo: turn this into an argument
 
         # -----------------------------------------
         # begin loop over time
@@ -1016,10 +1017,10 @@ class flowline2d:
             # ----------------------------
 
             if t / deltout == np.floor(t / deltout):
-                area = np.trapz(w[:edge], dx=delx)
+                area = np.trapz(w[:edge+1], dx=delx)
                 
                 # Save outputs
-                T_out[idx_out] = T_wk[0] - 3.2  # temp at the top of the glacier todo: verify this
+                T_out[idx_out] = T_wk[0]  # temp at the top of the glacier todo: verify this
                 P_out[idx_out] = P[0]
                 t_out[idx_out] = t
                 edge_out[idx_out] = edge * delx
@@ -1027,8 +1028,7 @@ class flowline2d:
                 area_out[idx_out] = area
                 # edge_out[idx_out] = delx * max(h[h > 10])
                 bal = b * w * delx  # mass added in a given cell units are m^3 yr^-1
-                bal_out[idx_out] = np.trapz(
-                    bal[:edge])  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
+                bal_out[idx_out] = np.trapz(bal[:edge+1])  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
                 ela_idx = np.abs(b).argmin()
                 ela_out[idx_out] = zb[ela_idx] + h[ela_idx]
                 
@@ -1050,8 +1050,8 @@ class flowline2d:
                 ax[1, 0].plot(t_out, scipy.ndimage.uniform_filter1d(ela_out, 20, mode='mirror'), c='black')
                 ax[2, 0].plot(t_out, T_out, c='blue', lw=0.25)
                 ax[2, 1].plot(t_out, scipy.ndimage.uniform_filter1d(edge_out, 20, mode='mirror') / 1000, c='black', lw=2)
-                ax[3, 0].plot(t_out, bal_out / (edge_out * 500), c='blue', lw=0.25)
-                ax[3, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / (edge_out * 500)), 20, mode='mirror'), c='blue', lw=2)
+                ax[3, 0].plot(t_out, bal_out / area_out, c='blue', lw=0.25)
+                ax[3, 1].plot(t_out, scipy.ndimage.uniform_filter1d(np.cumsum(bal_out / area_out), 20, mode='mirror'), c='blue', lw=2)
                 
                 # update the plot
                 fig.canvas.flush_events()
@@ -1115,7 +1115,7 @@ class flowline2d:
         z1 = z0 + self.h[-1, :pedge]
         
         fig, ax = self._init_plot()
-        poly = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='lightblue')
+        poly1 = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='lightblue', ec='lightblue')
         ax[0, 1].plot(x1 / 1000, z0, c='black', lw=2, )
         ax[0, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.area/1e6, 20, mode='mirror'), c='black')
         ax[1, 0].plot(self.t, scipy.ndimage.uniform_filter1d(self.ela, 20, mode='mirror'), c='blue')
@@ -1145,18 +1145,26 @@ class flowline2d:
             pad=10
             pedge = int(anth['edge'].iloc[-1]/self.delx + pad)
             self.pedge = pedge
-            x1 = self.x[:pedge]
-            z0 = self.zb[:pedge]
-            z1 = z0 + anth_h[-1][:pedge]
-    
-            poly2 = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc='none', ec='lightblue', hatch='....')
+            x2 = self.x[:pedge]
+            z1 = self.zb[:pedge]
+            z2 = z1 + anth_h[-1][:pedge]
+
+            poly2 = ax[0, 1].fill_between(x2 / 1000, z1, z2, fc='none', ec='lightblue')
+            if len(x1) > len(x2):
+                poly1.set_hatch('....')
+                poly1.set_facecolor('none')
+                poly2.set_facecolor('lightblue')
+            else:
+                poly1.set_facecolor('lightblue')
+                poly2.set_hatch('....')
+                
             
             anth['T_sm'] = scipy.ndimage.uniform_filter1d(anth['T'], 20, mode='mirror')
             anth['edge_sm'] = scipy.ndimage.uniform_filter1d(anth['edge'], 20, mode='mirror') / 1000
             anth['bal_sm'] = scipy.ndimage.uniform_filter1d(anth['bal'] / anth['area'], 20, mode='mirror')
             anth['cumbal_sm'] = scipy.ndimage.uniform_filter1d(np.cumsum(anth['bal'] / anth['area']), 20, mode='mirror')
             anth['ela_sm'] = scipy.ndimage.uniform_filter1d(anth['ela'], 20, mode='mirror')
-            anth = anth.iloc[1850:]
+            #anth = anth.iloc[1850:]
             ax[0, 0].plot(anth.t, anth['area']/1e6, c='black', lw=2, ls='dashed')
             ax[1, 0].plot(anth.t, anth['ela_sm'], c='red', lw=2,)
             ax[2, 0].plot(anth.t, anth['T_sm'], c='red', lw=2)

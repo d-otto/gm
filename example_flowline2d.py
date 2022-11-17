@@ -38,24 +38,34 @@ Prand = climate['Prand']
 
 #%%
 
-def temp(yr, LIA_cooling=True, ANTH_warming=True):
+def temp_comb(yr, LIA_cooling=True, ANTH_warming=True):
     Tdot = 0.0
     if (yr >= 999) & LIA_cooling:
         Tdot = Tdot -0.25 * (yr - 1000) / 1000
     if (yr >= 1850) & ANTH_warming:
         Tdot = Tdot + 1.3 * (yr - 1850) / 150
     return Tdot
+def temp_nat(yr):
+    Tdot = 0.0
+    if yr >= 999:
+        Tdot = Tdot -0.25 * (yr - 1000) / 1000
+    return Tdot
+def temp_stable(yr):
+    return 0
 
 #%%
 
-model = lgm.flowline2d(x_gr=x_gr, zb_gr=zb_gr, x_geom=x_geom, w_geom=w_geom, x_init=x_init, h_init=h_init, temp=temp,
-                       ts=0, tf=2025,
-                       Trand=Trand, Prand=Prand, rt_plot=True)
+model = lgm.flowline2d(x_gr=x_gr, zb_gr=zb_gr, x_geom=x_geom, w_geom=w_geom, x_init=x_init, h_init=h_init,
+                       temp=temp_stable, sigT=0, sigP=0,
+                       ts=0, tf=2025, T0=14.75,
+                       Trand=Trand, Prand=Prand,
+                       rt_plot=False, dt_plot=50)
 
-fig = model.plot()
+#fig = model.plot(xlim0=0, compare_fp='flowline2d_output_width_COMB.pickle')
+fig = model.plot(xlim0=0)
 fig.show()
-fig_output_name = 'flowline2d_output_width_COMB.png'
+fig_output_name = 'flowline2d_output_stable.png'
 plt.savefig(fig_output_name)
 
-file_output_name = 'flowline2d_output_width_COMB.csv'
-model.to_csv(file_output_name)
+file_output_name = 'flowline2d_output_stable.pickle'
+model.to_pickle(file_output_name)
