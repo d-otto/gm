@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
-import lgm
+import gm
 
 
 # Example of flowline model specification
@@ -22,7 +22,7 @@ params = dict(
     dzdx=0.4,
     L0=10000,  # model domain
 )
-model = lgm.flowline(**params)
+model = gm.flowline(**params)
 
 
 ###

@@ -21,6 +21,7 @@ import copy
 import pickle
 import gzip
 
+
 #%%
 
 # preallocate empty array and assign slice by chrisaycock
@@ -240,7 +241,7 @@ class gm3s:
                 # todo: implement sol'n for step change
                 b_p = np.full_like(ts, fill_value=b_p)
 
-        self.mode=mode
+        self.mode = mode
         self.bt_p = bt + b_p
         self.bt_eq = bt
         self.b_p = b_p
@@ -288,6 +289,8 @@ class gm3s:
         return df
         
     def linear(self, bt=None):
+        # preeeetty sure this doesn't work at all
+        
         if bt is not None:
             self.b_p = bt
             self.bt_p = self.bt_eq + self.b_p
@@ -299,7 +302,6 @@ class gm3s:
         eps = self.eps
         ts = self.ts
         
-        # fluxes (discritized versions of eq14)
         n_steps = len(ts)
         self.h = np.zeros(n_steps)
         self.F = np.zeros(n_steps)
@@ -326,7 +328,7 @@ class gm3s:
                 pass
     
             
-    def discrete(self):
+    def run(self):
         # convenience renaming
         K = self.K
         eps = self.eps
@@ -357,7 +359,7 @@ class gm3s:
                 L_p[i] = 3 * K[i] * L_p[i - 1] - \
                          3 * K[i]**2 * L_p[i - 2] + \
                          1 * K[i]**3 * L_p[i - 3] + \
-                         self.dt[i]**3 * tau / (eps * tau)**3 * (beta[i] * self.P_p[i - 3] - alpha * self.T_p[i - 3])
+                         self.dt[i]**3 * tau / (eps * tau)**3 * (beta[i] * self.P_p[i - 3] - self.alpha * self.T_p[i - 3])
                 
         self.L_p = L_p
         self.L = self.L_bar + self.L_p
@@ -373,7 +375,7 @@ class gm3s:
         return P_spec
     
     def phase(self, freq):
-        ''' Mostly correct? Why do I have to multiply by 1j?'''
+        ''' Mostly correct?'''
         
         H = np.exp(-6 * np.pi * 1j * freq * self.dt)/(1 - self.K * np.exp(-2 * np.pi * 1j * freq * self.dt))**3  # eq. 19b
         phase = np.angle(H * 1j, deg=True)
@@ -647,10 +649,7 @@ class flowline:
             except:
                 print('Instability :(')
                 break
-            
-                
-        
-        
+
         # collect results
         res = xr.Dataset(data_vars=dict(
             edge=(['t'], np.array(self.edge_out)),
@@ -807,9 +806,9 @@ class flowline2d:
         return fig, ax
 
     def __init__(self, x_gr, zb_gr, x_geom, w_geom, x_init, h_init, temp, xmx,
-                 Trand=None, Prand=None, t_stab=50,
-                 t0=0, n=3, gamma=6.5e-3, mu=0.65, g=9.81, rho=916.8, f_d=1.9e-24, f_s=5.7e-20, sigT=0.8, sigP=1.0,
-                 T0=14.70, P0=5, fd = 1.9e-24, fs = 5.7e-20,  delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
+                 Trand=None, Prand=None, t_stab=50, bed_shape='rectangular',
+                 t0=0, n=3, gamma=6.5e-3, mu=0.65, g=9.81, rho=916.8, fd=1.9e-24, fs=5.7e-20, sigT=0.8, sigP=1.0,
+                 T0=14.70, P0=5, delx=50, delt=0.0125 / 8, ts=0, tf=2025, dt_plot=100, rt_plot=True, xlim0=1500):
         """2d flowline model
 
         This module demonstrates documentation as specified by the `NumPy
@@ -942,6 +941,10 @@ class flowline2d:
         nxs = round(xmx / delx)  # number of grid points
         nts = round(np.floor((tf - ts) / delt))  # number of time steps ('round' used because need nts as integer)
         nyrs = tf - ts
+        
+        
+        # xmx = xmx + (delx - (xmx % delx))  # round up xmx to the nearest delx
+        xmx = xmx - (xmx % delx)  # round down xmx to the nearest delx
         x = np.arange(0, xmx, delx)  # x array
         
         fd = fd * np.pi * 1e7
@@ -964,7 +967,7 @@ class flowline2d:
         # stored in glac_init.mat
         # probably only worth it for mass balance parameterizations similar to the default one we tried
         # ----------------------------------------------------------------------------------------------
-
+        
         h0 = interp1d(x_init, h_init, 'linear')
         h0 = h0(x)
         h = np.full(x.size, fill_value=h0)  # initialize height array
@@ -1179,7 +1182,7 @@ class flowline2d:
 
     def to_pickle(self, fp):
         # save output?
-        output = dict(t=self.t, T=self.T, P=self.P, edge=self.edge, bal=self.bal, ela=self.ela, area=self.area, h=self.h)
+        output = dict(t=self.t, T=self.T, P=self.P, edge=self.edge, bal=self.bal, ela=self.ela, area=self.area, h=self.h, x=self.x)
         with open(fp, 'wb') as f:
             pickle.dump(output, f)
         

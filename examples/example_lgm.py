@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-examples.py
+example_lgm.py
 
 Description.
 
@@ -13,64 +13,7 @@ import pandas as pd
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from src import lgm
-
-
-# %% Run the flowline model
-# 
-# params = dict(
-#     L0=8000,
-#     H=44,
-#     # tau=6.73,
-#     dzdx=0.4,
-# )
-# 
-# years = 25
-# dt = 1
-# 
-# model_flowline = lgm.flowline(**params)
-# model_flowline.run(years=years, dt=dt, bt=np.full(years, fill_value=5.5))
-# 
-# t = model_flowline.ts
-# fig, ax = plt.subplots(3, 1)
-# ax[0].plot(t, model_flowline.h, label='height')
-# ax[1].plot(t, model_flowline.L, label='length')
-# ax[2].plot(t, model_flowline.F - model_flowline.bt, label='flux')
-# ax[0].legend()
-# ax[1].legend()
-# ax[2].legend()
-# 
-# # %% run the one stage model
-# 
-# 
-# params_1s = dict(
-#     # L=8000,
-#     H=44,
-#     tau=6.73,
-#     dzdx=0.4,
-#     P0=5.0,  # m/yr
-#     sigP=1.0,
-#     sigT=0.8,
-# 
-#     mu=0.65,  # m/(yr * C)
-#     gamma=6.5,  # C/km
-#     w=500,
-#     Atot=4.0,
-#     Aabl=2.0,
-#     ATgt0=3.4,
-#     # model params
-#     years=100,
-#     dt=1,
-#     mode='l'
-# )
-# model_1s = lgm.gm1s(**params_1s)
-# 
-# t = model_1s.t
-# fig, ax = plt.subplots()
-# ax.plot(t, model_1s.L / model_1s.L.max(), label='length')
-# ax.plot(t, model_1s.Pp, label='precip')
-# ax.plot(t, model_1s.Tp, label='temp')
-# ax.legend()
+from src import gm
 
 # %% Fig. 7
 
@@ -91,7 +34,7 @@ params_3s = dict(
 years = 100
 dt = 1
 
-m3s = lgm.gm3s(**params_3s)
+m3s = gm.gm3s(**params_3s)
 m3s.linear()
 
 t = m3s.ts / m3s.tau
@@ -117,40 +60,10 @@ ax.legend()
 # ax.plot(freq, phase, label='phase')
 
 #%% Fig 8b.
-t = np.arange(0, 40, 1)
-acf = m3s.acf(t=t)
-fig, ax = plt.subplots()
-ax.plot(t, acf, label='ACF')
-
-
-#%% Fig 8a.
-
-params_3s = dict(
-    Atot=8000,
-    W=1,
-    L=8000,
-    H=44,
-    tau=6.73,
-    dzdx=0.4,
-    bt=0,
-    ts=np.arange(0, 50, 1)
-)
-
-years = 100
-dt = 1
-
-m3s = lgm.gm3s(**params_3s)
-m3s.linear(bt=np.tile(-0.5, 50))
-L_retreat = m3s.L + m3s.L_bar
-
-m3s = lgm.gm3s(**params_3s)
-m3s.linear(bt=np.tile(0.5, 50))
-L_advance = m3s.L + m3s.L_bar
-
-fig, ax = plt.subplots()
-ax.plot(m3s.ts, L_advance, label='Length')
-ax.plot(m3s.ts, L_retreat, label='Length')
-ax.set_xlim(-5, 30)
+# t = np.arange(0, 40, 1)
+# acf = m3s.acf(t=t)
+# fig, ax = plt.subplots()
+# ax.plot(t, acf, label='ACF')
 
 
 #%% Looking more at the linear model
@@ -180,19 +93,9 @@ ax[1].set_xlabel('t/tau')
 leg = np.array([ax[0].legend(), ax[1].legend(), ax[2].legend()])
 fig.show()
 
-
  
 #%% Comparing 3s and 1s
 
-# todo : look at the 3s model changing before the start of the climate trend
-
-# trend
-# b_p = np.concatenate([
-#     -1/50 * np.arange(0, 50, 1),
-#     np.tile(-1, 250)
-# ])
-
-# step
 b_p = np.concatenate([
     np.tile(0, 100),
     np.tile(-1, 100),
@@ -221,11 +124,9 @@ params_3s = dict(
     ts=np.arange(0, len(b_p), 1),
     
 )
-
-
-m1s = lgm.gm1s(**params_1s)
-m3s = lgm.gm3s(**params_3s)
-m3s.discrete()
+m1s = gm.gm1s(**params_1s)
+m3s = gm.gm3s(**params_3s)
+m3s.run()
 
 #print(m3s.L_p)
 #print(m3s.bt)
@@ -241,14 +142,11 @@ ax[1].plot(m1s.ts, m1s.L, label='1s L')
 ax[1].plot(m3s.ts, m3s.L, label='3s L')
 ax[1].grid(which='both', axis='both')
 
-
-
 ax[2].plot(m1s.ts, m1s.L_p, label='1s L_p', color='teal')
 ax[2].plot(m3s.ts, m3s.L_p, label='3s L_p', color='orange')
 ax[2].plot(m1s.ts, m1s.L_eq, label='1s L_eq', color='blue')
 ax[2].plot(m3s.ts, m3s.L_eq, label='3s L_eq', color='red')
 ax[2].grid(which='both', axis='both')
-
 
 ax[2].set_xlabel('t')
 leg = [axis.legend() for axis in ax]
@@ -258,7 +156,6 @@ fig.show()
 
 
 #%%
-
 
 params_3s = dict(
     Atot=8000,
@@ -273,20 +170,20 @@ b_p = np.concatenate([
     np.linspace(0, -1, 20),
     np.tile(-1, 530),
 ])
-tau2 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+tau2 = gm.gm3s(b_p=b_p, **params_3s).run()
 
 b_p = np.concatenate([
     np.linspace(0, -1, 60),
     np.tile(-1, 490),
 ])
-tau6 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+tau6 = gm.gm3s(b_p=b_p, **params_3s).run()
 
 
 b_p = np.concatenate([
     np.linspace(0, -1, 500),
     np.tile(-1, 50),
 ])
-tau50 = lgm.gm3s(b_p=b_p, **params_3s).discrete()
+tau50 = gm.gm3s(b_p=b_p, **params_3s).run()
 # print(m3s.L_p)
 # print(m3s.bt)
 # print(m3s.F)
