@@ -638,9 +638,7 @@ class flowline:
                 )
                 self.T_wk = (
                     self.Tbar + self.sigT * self.rng.standard_normal(1)
-                ) * np.ones_like(
-                    self.x
-                ) - self.gamma * self.zb  # todo: this should be based on the ice surface?
+                ) * np.ones_like(self.x) - self.gamma * self.zb  # todo: this should be based on the ice surface?
                 # T_wk = (self.Tbar) * \
                 #        np.ones_like(self.x, dtype='float') - \
                 #        self.gamma * self.zb + \
@@ -863,45 +861,7 @@ class flowline:
 
 ###############################################################################
 class flowline2d:
-    def _init_plot(self):
-        fig = plt.figure(figsize=(12, 10), dpi=200)
-        gs = gridspec.GridSpec(4, 2, figure=fig, height_ratios=(1, 1, 1, 1))
-        ax = np.empty((4, 2), dtype="object")
-        plt.show(block=False)
-
-        ax[0, 0] = fig.add_subplot(gs[0, 0])
-        ax[0, 0].set_xlabel("Time (years)")
-        ax[0, 0].set_ylabel("Glacier Area ($km^2$)")
-
-        ax[1, 0] = fig.add_subplot(gs[1, 0])
-        ax[1, 0].set_xlabel("Time (years)")
-        ax[1, 0].set_ylabel("Equilibrium Line Altitude (m)")
-
-        ax[0, 1] = fig.add_subplot(gs[0:2, 1])
-        ax[0, 1].set_xlabel("Distance (km)")
-        ax[0, 1].set_ylabel("Elevation (m)")
-
-        ax[2, 0] = fig.add_subplot(gs[2, 0])
-        ax[2, 0].set_ylabel("T ($^o$C)")
-
-        ax[2, 1] = fig.add_subplot(gs[2, 1])
-        ax[2, 1].set_ylabel("L (km)")
-
-        ax[3, 0] = fig.add_subplot(gs[3, 0])
-        ax[3, 0].set_ylabel("Bal (m $yr^{-1}$)")
-        ax[3, 0].set_xlabel("Time (years)")
-
-        ax[3, 1] = fig.add_subplot(gs[3, 1])
-        ax[3, 1].set_xlabel("Time (years)")
-        ax[3, 1].set_ylabel("Cum. bal. (m)")
-
-        for axis in ax.ravel():
-            if axis is not None:  # this handles gridspec col/rowspans > 1
-                axis.grid(axis="both", alpha=0.5)
-                axis.set_axisbelow(True)
-        plt.tight_layout()
-
-        return fig, ax
+    
 
     def __init__(
         self,
@@ -1459,3 +1419,43 @@ class flowline2d:
             pickle.dump(output, f)
 
         return None
+    
+    def _init_plot(self):
+        fig = plt.figure(figsize=(12, 10), dpi=200)
+        gs = gridspec.GridSpec(4, 2, figure=fig, height_ratios=(1, 1, 1, 1))
+        ax = np.empty((4, 2), dtype="object")
+        plt.show(block=False)
+
+        ax[0, 0] = fig.add_subplot(gs[0, 0])
+        ax[0, 0].set_xlabel("Time (years)")
+        ax[0, 0].set_ylabel("Glacier Area ($km^2$)")
+
+        ax[1, 0] = fig.add_subplot(gs[1, 0])
+        ax[1, 0].set_xlabel("Time (years)")
+        ax[1, 0].set_ylabel("Equilibrium Line Altitude (m)")
+
+        ax[0, 1] = fig.add_subplot(gs[0:2, 1])
+        ax[0, 1].set_xlabel("Distance (km)")
+        ax[0, 1].set_ylabel("Elevation (m)")
+
+        ax[2, 0] = fig.add_subplot(gs[2, 0])
+        ax[2, 0].set_ylabel("T ($^o$C)")
+
+        ax[2, 1] = fig.add_subplot(gs[2, 1])
+        ax[2, 1].set_ylabel("L (km)")
+
+        ax[3, 0] = fig.add_subplot(gs[3, 0])
+        ax[3, 0].set_ylabel("Bal (m $yr^{-1}$)")
+        ax[3, 0].set_xlabel("Time (years)")
+
+        ax[3, 1] = fig.add_subplot(gs[3, 1])
+        ax[3, 1].set_xlabel("Time (years)")
+        ax[3, 1].set_ylabel("Cum. bal. (m)")
+
+        for axis in ax.ravel():
+            if axis is not None:  # this handles gridspec col/rowspans > 1
+                axis.grid(axis="both", alpha=0.5)
+                axis.set_axisbelow(True)
+        plt.tight_layout()
+
+        return fig, ax
