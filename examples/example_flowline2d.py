@@ -58,7 +58,7 @@ def temp_stable(yr):
 model = lgm.flowline2d(x_gr=x_gr, zb_gr=zb_gr, x_geom=x_geom, w_geom=w_geom, x_init=x_init, h_init=h_init,
                        temp=temp_stable, sigT=0, sigP=0,
                        ts=0, tf=2025, T0=14.75,
-                       Trand=Trand, Prand=Prand,
+                       T=Trand, P=Prand,
                        rt_plot=False, dt_plot=50)
 
 #fig = model.plot(xlim0=0, compare_fp='flowline2d_output_width_COMB.pickle')

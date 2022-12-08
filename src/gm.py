@@ -2,8 +2,7 @@
 
 import collections
 import copy
-import pickle
-
+import dill
 import matplotlib as mpl
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -17,6 +16,7 @@ from numpy.random import default_rng
 from scipy.interpolate import interp1d
 from scipy.stats import norm
 import logging
+from tqdm import tqdm
 
 
 # %%
@@ -874,8 +874,8 @@ class flowline2d:
         h_init,
         temp,
         xmx,
-        Trand=None,
-        Prand=None,
+        T=None,
+        P=None,
         t_stab=50,
         bed_shape="rectangular",
         t0=0,
@@ -918,9 +918,9 @@ class flowline2d:
             x dimension of initial thickness profile; m
         h_init : array-like
             initial ice thickness profile; m
-        Trand : array-like
+        T : array-like
             random state for temperature
-        Prand : array-like
+        P : array-like
             random state for precipitation
         rho : float
             Ice density kg/m^3
@@ -972,6 +972,10 @@ class flowline2d:
         # # What is the distribution of trends?
         # # How does the run length work? Does it follow a Poisson process?
         # # Is the dynamical model consistent with a Gaussian pdf?
+        
+        
+        
+        
         @njit(fastmath={"contract", "arcp", "nsz", "ninf", "nnan"})
         def space_loop(h, b):
             Qp = np.zeros(x.size)  # Qp equals j+1/2 flux
@@ -992,14 +996,14 @@ class flowline2d:
                         * (rho * g) ** 3
                         * (fd * h_ave + fs / h_ave)
                     )  # flux at plus half grid point
-                    Qm[0] = 0  # flux at minus half grid point
+                    # Qm[0] = 0  # flux at minus half grid point
                     dhdt[0] = (
                         b[0]
                         - Qp[0] / (delx / 2)
                         - (Qp[0] + Qm[0]) / (2 * w[0]) * dwdx[0]
                     )
                 elif (h[j] <= 0) & (h[j - 1] > 0):  # glacier toe condition
-                    Qp[j] = 0
+                    # Qp[j] = 0
                     h_ave = h[j - 1] / 2
                     dhdx = -h[j - 1] / delx  # correction inserted ght nov-24-04
                     dzdx = (dzbdx[j - 1] + dzbdx[j]) / 2
@@ -1017,8 +1021,8 @@ class flowline2d:
                     edge = j  # index of glacier toe - used for fancy plotting
                 elif (h[j] <= 0) & (h[j - 1] <= 0):  # beyond glacier toe - no glacier flux
                     dhdt[j] = b[j]  # todo: verify that this is actually being evaluated
-                    Qp[j] = 0
-                    Qm[j] = 0
+                    # Qp[j] = 0
+                    # Qm[j] = 0
                 else:  # within the glacier
                     h_ave = (h[j + 1] + h[j]) / 2
                     dhdx = (h[j + 1] - h[j]) / delx  # correction inserted ght nov-24-04
@@ -1098,8 +1102,8 @@ class flowline2d:
         h = np.full(x.size, fill_value=h0)  # initialize height array todo: should this be a copy of h0?
 
         # initialize climate forcing
-        Tp = sigT * Trand[ts : tf]
-        Pp = sigP * Prand[ts : tf]  # initialize climate forcing
+        Tp = sigT * T[ts: tf]
+        Pp = sigP * P[ts: tf]  # initialize climate forcing
         Tp[:t_stab] = 0  # todo: turn this into an argument
 
         # -----------------------------------------
@@ -1109,25 +1113,26 @@ class flowline2d:
         idx_out = 0
         deltout = 1
         nouts = int((nts * delt) // 1) 
-        edge_out = np.full(nouts, fill_value=np.nan, dtype="int")
-        edge_m_out = np.full(nouts, fill_value=np.nan, dtype="float")
+        edge_idx_out = np.full(nouts, fill_value=np.nan, dtype="int")
+        edge_out = np.full(nouts, fill_value=np.nan, dtype="float")
         t_out = np.full(nouts, fill_value=np.nan, dtype="float")
         T_out = np.full(nouts, fill_value=np.nan, dtype="float")
         P_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        bal_out = np.full(nouts, fill_value=np.nan, dtype="float")
+        gwb_out = np.full(nouts, fill_value=np.nan, dtype="float")
         ela_out = np.full(nouts, fill_value=np.nan, dtype="float")
         area_out = np.full(nouts, fill_value=np.nan, dtype="float")
         h_out = np.full((nouts, nxs), fill_value=np.nan, dtype="float")
+        b_out = np.full((nouts, nxs), fill_value=np.nan, dtype="float")
 
         if rt_plot:
             fig, ax = self._init_plot()
 
-        for i in range(0, nts):
+        for i in tqdm(range(0, nts), unit_scale=delt, unit='yrs', bar_format="{desc}: {percentage:2.0f}%|{bar}| {n:.1f}/{total:.1f} [{elapsed}<{remaining}, {rate_fmt}{postfix}", ascii=True, ncols=100):
             t = delt * i  # time in years
             # define climate every year
             if t == np.floor(t):
                 yr = yr + 1
-                print(f"yr = {yr}")
+                # print(f"yr = {yr}")
                 P = np.ones(x.size) * (P0 + 1 * Pp[yr])
                 T_wk = (T0 + 1 * Tp[yr]) * np.ones(x.size) - gamma * (zb + h)
                 T_wk = T_wk + temp(yr)
@@ -1147,16 +1152,18 @@ class flowline2d:
                 # Save outputs
                 area = np.sum(w[: edge+1]) * delx
                 bal = b * w * delx  # mass added in a given cell units are m^3 yr^-1
-                bal_out[idx_out] = bal[: edge+1].sum()  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
-                T_out[idx_out] = T_wk[0]  # temp at the top of the glacier todo: verify this
+                gwb_out[idx_out] = bal[: edge+1].sum()  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
+                T_out[idx_out] = (T0 + 1 * Tp[yr])  # temp at the top of the glacier todo: verify this
                 P_out[idx_out] = P[0]
                 t_out[idx_out] = t
-                edge_out[idx_out] = edge
-                edge_m_out[idx_out] = edge * delx
+                edge_idx_out[idx_out] = edge
+                edge_out[idx_out] = edge * delx
                 h_out[idx_out, :] = h
                 area_out[idx_out] = area
                 ela_idx = np.abs(b).argmin()
                 ela_out[idx_out] = zb[ela_idx] + h[ela_idx]
+                b_out[idx_out, :] = b.copy()
+                b_out[idx_out, edge:] = np.nan
 
                 idx_out = idx_out + 1
             if (
@@ -1194,17 +1201,17 @@ class flowline2d:
                 ax[2, 0].plot(t_out, T_out, c="blue", lw=0.25)
                 ax[2, 1].plot(
                     t_out,
-                    scipy.ndimage.uniform_filter1d(edge_m_out, 20, mode="mirror") / 1000,
+                    scipy.ndimage.uniform_filter1d(edge_out, 20, mode="mirror") / 1000,
                     c="black",
                     lw=2,
                 )
-                ax[3, 0].plot(t_out, bal_out / area_out, c="blue", lw=0.25)
+                ax[3, 0].plot(t_out, gwb_out / area_out, c="blue", lw=0.25)
                 ax[3, 1].plot(
                     t_out,
                     # scipy.ndimage.uniform_filter1d(
-                    #     np.cumsum(bal_out / area_out), 20, mode="mirror"
+                    #     np.cumsum(gwb_out / area_out), 20, mode="mirror"
                     # ),
-                    np.cumsum(bal_out / area_out) - np.cumsum((bal_out / area_out).mean()),
+                    np.cumsum(gwb_out / area_out) - np.cumsum((gwb_out / area_out).mean()),
                     c="blue",
                     lw=2,
                 )
@@ -1232,7 +1239,7 @@ class flowline2d:
             ax[2, 1].set_xlim(xlim0, tf)
             ax[3, 0].plot(
                 t_out,
-                scipy.ndimage.uniform_filter1d(bal_out / area_out, 20, mode="mirror"),
+                scipy.ndimage.uniform_filter1d(gwb_out / area_out, 20, mode="mirror"),
                 c="blue",
                 lw=2,
             )
@@ -1240,7 +1247,7 @@ class flowline2d:
             ax[3, 1].plot(
                 t_out,
                 scipy.ndimage.uniform_filter1d(
-                    np.cumsum(bal_out / area_out), 20, mode="mirror"
+                    np.cumsum(gwb_out / area_out), 20, mode="mirror"
                 ),
                 c="blue",
                 lw=2,
@@ -1252,9 +1259,10 @@ class flowline2d:
         self.T = T_out
         self.P = P_out
         self.t = t_out + ts
+        self.edge_idx = edge_idx_out
         self.edge = edge_out
-        self.edge_m = edge_m_out
-        self.bal = bal_out
+        self.gwb = gwb_out
+        self.b = b_out
         self.ela = ela_out
         self.h = h_out
         self.x = x
@@ -1271,8 +1279,7 @@ class flowline2d:
         self.sigT = sigT
         self.sigP = sigP
         self.P0 = P0
-        self.T0 = T0
-        self.b = b  # final mass balance profile
+        self.T0 = T0        
 
         return None
 
@@ -1296,7 +1303,7 @@ class flowline2d:
             xlim0 = self.ts
         
         pad = 10
-        pedge = self.edge[-1] + pad
+        pedge = self.edge_idx[-1] + pad
         self.pedge = pedge
         x1 = self.x[:pedge]
         z0 = self.zb[:pedge]
@@ -1333,15 +1340,33 @@ class flowline2d:
         ax[2, 0].set_xlim(xlim0, self.tf)
         ax[2, 1].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.edge_m, 20, mode="mirror") / 1000,
+            scipy.ndimage.uniform_filter1d(self.edge, 20, mode="mirror") / 1000,
             c="black",
             lw=2,
         )
+        ax[2, 1].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.edge, 300, mode="mirror") / 1000,
+            c="pink",
+            lw=2,
+        )
+        ax[2, 1].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.edge, 1000, mode="mirror") / 1000,
+            c="red",
+            lw=2,
+        )
         ax[2, 1].set_xlim(xlim0, self.tf)
-        ax[3, 0].plot(self.t, self.bal / self.area, c="blue", lw=0.25)
+        ax[2, 2].plot(
+            self.t,
+            np.cumsum(self.edge)/np.arange(1, self.tf+1),
+            c='black',
+        )
+        ax[2, 2].set_xlim(xlim0, self.tf)
+        ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
         ax[3, 0].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.bal / self.area, 20, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 20, mode="mirror"),
             c="blue",
             lw=2,
         )
@@ -1349,8 +1374,8 @@ class flowline2d:
         ax[3, 1].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(
-                np.cumsum(self.bal / self.area)
-                - np.cumsum(np.full_like(self.bal, fill_value=(self.bal / self.area).mean()))
+                np.cumsum(self.gwb / self.area)
+                - np.cumsum(np.full_like(self.gwb, fill_value=(self.gwb / self.area).mean()))
                 , 20, mode="mirror"
             ),
             c="blue",
@@ -1359,7 +1384,7 @@ class flowline2d:
         ax[3, 1].set_xlim(xlim0, self.tf)
         ax[3, 2].plot(
             self.t,
-            np.cumsum(self.bal / self.area)/np.arange(1, len(self.bal)+1),  # cumulative mean
+            pd.Series(self.gwb / self.area).rolling(300).mean(),
             c='blue',
         )
         ax[3, 2].set_xlim(xlim0, self.tf)
@@ -1367,7 +1392,7 @@ class flowline2d:
         # plot extras
         if compare_fp:
             with open(compare_fp, "rb") as f:
-                anth = pickle.load(f)
+                anth = dill.load(f)
             # anth = pd.DataFrame().from_dict(anth)
             anth_h = anth.pop("h")
             anth = pd.DataFrame.from_dict(anth)
@@ -1402,7 +1427,6 @@ class flowline2d:
             anth["ela_sm"] = scipy.ndimage.uniform_filter1d(
                 anth["ela"], 20, mode="mirror"
             )
-            # anth = anth.iloc[1850:]
             ax[0, 0].plot(anth.t, anth["area"] / 1e6, c="black", lw=2, ls="dashed")
             ax[1, 0].plot(
                 anth.t,
@@ -1416,18 +1440,30 @@ class flowline2d:
             ax[3, 0].plot(anth.t, anth["bal_sm"], c="red", lw=2)
             ax[3, 0].plot(anth.t, anth["bal"] / anth.area, c="red", lw=0.25)
             ax[3, 1].plot(anth.t, anth["cumbal_sm"], c="red", lw=2)
-            fig.show()
+            plt.tight_layout()
 
         return fig
 
     def to_pickle(self, fp):
         with open(fp, "wb") as f:
-            pickle.dump(self, f)
+            dill.dump(self, f)
 
         return None
+
+    def to_pandas(self):
+        d = dict(
+            T=self.T,
+            area=self.area,
+            bal=self.gwb,
+            edge=self.edge_idx,
+            edge_m=self.edge,
+            ela=self.ela
+        )
+        df = pd.DataFrame(d, index=self.t)
+        return df
     
     def _init_plot(self):
-        fig = plt.figure(figsize=(18, 10), dpi=100)
+        fig = plt.figure(figsize=(18, 10), dpi=100, layout='tight')
         gs = gridspec.GridSpec(4, 3, figure=fig, height_ratios=(1, 1, 1, 1))
         ax = np.empty((4, 3), dtype="object")
         plt.show(block=False)  # for live plotting, though maybe block=True would wait for the plot to open before running?
@@ -1449,6 +1485,9 @@ class flowline2d:
 
         ax[2, 1] = fig.add_subplot(gs[2, 1])
         ax[2, 1].set_ylabel("L (km)")
+
+        ax[2, 2] = fig.add_subplot(gs[2, 2])
+        ax[2, 2].set_ylabel("L (km)")
         
         ax[3, 0] = fig.add_subplot(gs[3, 0])
         ax[3, 0].set_ylabel("Bal (m $yr^{-1}$)")
