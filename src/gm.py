@@ -1061,7 +1061,7 @@ class flowline2d:
         # #-----------------
         # #define parameters
         # #-----------------
-        tf = tf + 1  # results in common-sense arguments. The last year executed is tf as supplied to the fn. 
+        # tf = tf + 1  # results in common-sense arguments. The last year executed is tf as supplied to the fn. 
         nts = round(
             np.floor((tf - ts) / delt)
         )  # number of time steps ('round' used because need nts as integer)
@@ -1303,11 +1303,11 @@ class flowline2d:
             xlim0 = self.ts
         
         pad = 10
-        pedge = self.edge_idx[-1] + pad
+        pedge = int(self.edge_idx[-300:].mean()) + pad
         self.pedge = pedge
         x1 = self.x[:pedge]
         z0 = self.zb[:pedge]
-        z1 = z0 + self.h[-1, :pedge]
+        z1 = z0 + self.h[-300:, :pedge].mean(axis=0)
 
         fig, ax = self._init_plot()
         poly1 = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc="lightblue", ec="lightblue")
@@ -1326,16 +1326,23 @@ class flowline2d:
         ax[1, 0].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(self.ela, 20, mode="mirror"),
-            c="blue",
+            c="black",
         )
         ax[1, 0].set_xlim(xlim0, self.tf)
         ax[2, 1].set_xlim(0, x1.max() / 1000 * 1.1)
-        ax[2, 0].plot(self.t, self.T, c="blue", lw=0.25)
+        #ax[2, 0].plot(self.t, self.T, c="blue", lw=0.25, alpha=0.25)
         ax[2, 0].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(self.T, 20, mode="mirror"),
-            c="blue",
-            lw=2,
+            c="black",
+            lw=1,
+            alpha=0.5
+        )
+        ax[2, 0].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.T, 300, mode="mirror"),
+            c="red",
+            lw=1,
         )
         ax[2, 0].set_xlim(xlim0, self.tf)
         ax[2, 1].plot(
@@ -1359,16 +1366,23 @@ class flowline2d:
         ax[2, 1].set_xlim(xlim0, self.tf)
         ax[2, 2].plot(
             self.t,
-            np.cumsum(self.edge)/np.arange(1, self.tf+1),
+            np.cumsum(self.edge)/np.arange(self.ts, self.tf),
             c='black',
         )
         ax[2, 2].set_xlim(xlim0, self.tf)
-        ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
+        #ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
         ax[3, 0].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(self.gwb / self.area, 20, mode="mirror"),
-            c="blue",
-            lw=2,
+            c="black",
+            lw=1,
+            alpha=0.5,
+        )
+        ax[3, 0].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 300, mode="mirror"),
+            c="red",
+            lw=1,
         )
         ax[3, 0].set_xlim(xlim0, self.tf)
         ax[3, 1].plot(
@@ -1384,7 +1398,7 @@ class flowline2d:
         ax[3, 1].set_xlim(xlim0, self.tf)
         ax[3, 2].plot(
             self.t,
-            pd.Series(self.gwb / self.area).rolling(300).mean(),
+            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 300, mode='mirror'),
             c='blue',
         )
         ax[3, 2].set_xlim(xlim0, self.tf)
