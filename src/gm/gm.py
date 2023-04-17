@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import copy
 import collections
 import copy
 import dill
@@ -11,7 +12,7 @@ import pandas as pd
 import scipy.io
 import scipy.ndimage
 import xarray as xr
-from numba import njit
+import numba as nb
 from numpy.random import default_rng
 from scipy.interpolate import interp1d
 from scipy.stats import norm
@@ -33,6 +34,12 @@ def shift(arr, num, fill_value=np.nan):
     else:
         result[:] = arr
     return result
+
+
+# relevant as of Numpy 1.24
+# https://github.com/iperov/DeepFaceLab/pull/5618/commits/52dcf152e2b5aedf96b5c8a343cad24585492df6
+def fast_clip(array, min_value, max_value):
+    return np.minimum(max_value, np.maximum(array, min_value, out=array), out=array)
 
 
 # %%
@@ -101,10 +108,7 @@ class gm1s:
                     continue
 
                 self.L_p[i] = (
-                    self.tau[i]
-                    * self.beta
-                    * self.bt_p[i]
-                    * (t - self.tau[i] * (1 - np.exp(-t / self.tau[i])))
+                    self.tau[i] * self.beta * self.bt_p[i] * (t - self.tau[i] * (1 - np.exp(-t / self.tau[i])))
                 )
 
         self.L = self.L_bar + np.cumsum(self.L_p)
@@ -117,9 +121,7 @@ class gm1s:
             if i == 0:
                 self.L_p[i] = self.beta * t * self.b_p[i]
                 continue
-            self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[
-                i - 1
-            ] + self.beta * self.dt[i] * self.b_p[i]
+            self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[i - 1] + self.beta * self.dt[i] * self.b_p[i]
         self.L = self.L_bar + self.L_p
         self.L_eq = self.tau * self.beta * self.bt_p
         self.dL = abs(self.L_p[-1])
@@ -233,9 +235,11 @@ class gm3s:
         sigP=None,
         sigb=None,
         P0=None,
+        T0=None,
         T_p=None,
         P_p=None,
         ATgt0=None,
+        zb=None,
     ):
         self.ts = ts
         self.dt = np.diff(self.ts + 1, prepend=ts[0])  # works idk why
@@ -247,13 +251,16 @@ class gm3s:
             # Tp = array of melt-season temperature anomalise
             # Pp = array of accumlation anomalies
             # bp = array of mass balance anomalies
+            self.alpha = mu * ATgt0 * self.dt / (W * H)
             if T_p is None:
-                self.T_p = norm.rvs(scale=sigT, size=len(ts))
+                T_p = np.zeros_like(ts)
             if P_p is None:
-                self.P_p = norm.rvs(scale=sigP, size=len(ts)) + P0
-            if b_p is None and mode == "b":
-                self.b_p = norm.rvs(scale=sigb, size=len(ts))
-            self.alpha = -mu * ATgt0 * self.dt / (w * H)
+                P_p = np.zeros_like(ts)
+            T_p = (T0 - gamma * zb) + T_p
+            P_p = P0 + P_p
+            if b_p is None:  # is apparently faster for numpy 1.17
+                b_p = P_p - T_p * self.alpha
+
             self.ATgt0 = ATgt0
             self.sigT = sigT
             self.sigP = sigP
@@ -273,7 +280,6 @@ class gm3s:
         self.mode = mode
         self.bt_p = bt + b_p
         self.bt_eq = bt
-        self.b_p = b_p
         self.L_bar = L  # m
         self.H = H  # m
         self.dzdx_s = dzdx
@@ -291,7 +297,7 @@ class gm3s:
                 self.tau = W * H / (mu * gamma * dzdx * Aabl)
             except:
                 try:
-                    self.tau = H / bt
+                    self.tau = -H / bt
                 except:
                     pass
         else:
@@ -302,6 +308,8 @@ class gm3s:
         self.eps = 1 / np.sqrt(3)
         self.K = 1 - self.dt / (self.eps * self.tau)
         self.beta = self.Atot * self.dt / (self.W * self.H)
+        self.T_p = T_p
+        self.P_p = P_p
 
     def copy(self):
         return copy.deepcopy(self)
@@ -349,26 +357,16 @@ class gm3s:
 
         for i, t in enumerate(ts):
 
-            self.h[i] = (1 - self.dt[i] / (eps * tau)) * self.h[
-                t - self.dt[i]
-            ] + self.bt_p[i]
-            self.F[i] = (1 - self.dt[i] / (eps * tau)) * self.F[
-                t - self.dt[i]
-            ] + L_bar / (eps * tau) ** 2 * self.h[
+            self.h[i] = (1 - self.dt[i] / (eps * tau)) * self.h[t - self.dt[i]] + self.bt_p[i]
+            self.F[i] = (1 - self.dt[i] / (eps * tau)) * self.F[t - self.dt[i]] + L_bar / (eps * tau) ** 2 * self.h[
                 i
             ]  # writing F2 as F
-            self.L[i] = (1 - self.dt[i] / (eps * tau)) * self.L[
-                t - self.dt[i]
-            ] + self.F[i] / (eps * H)
+            self.L[i] = (1 - self.dt[i] / (eps * tau)) * self.L[t - self.dt[i]] + self.F[i] / (eps * H)
             self.L_p[i] = self.L[i] - self.L[t - self.dt[i]]
 
             try:
                 self.L_debug = (
-                    self.dt
-                    * self.L_bar
-                    / (eps * self.H)
-                    * (self.dt / (eps * tau)) ** 2
-                    * self.bt_p[t - 3]
+                    self.dt * self.L_bar / (eps * self.H) * (self.dt / (eps * tau)) ** 2 * self.bt_p[t - 3]
                 )  # if I specified everything right, this should be the same is L[t]
             except:
                 pass
@@ -379,6 +377,7 @@ class gm3s:
         eps = self.eps
         tau = self.tau
         beta = self.beta
+        L_bar = self.L_bar
 
         L_p = np.zeros_like(self.ts, dtype="float")
 
@@ -395,10 +394,7 @@ class gm3s:
                     3 * K[i] * L_p[i - 1]
                     - 3 * K[i] ** 2 * L_p[i - 2]
                     + 1 * K[i] ** 3 * L_p[i - 3]
-                    + self.dt[i] ** 3
-                    * tau
-                    / (eps * tau) ** 3
-                    * (beta[i] * self.b_p[i - 3])
+                    + self.dt[i] ** 3 * tau / (eps * tau) ** 3 * (beta[i] * self.b_p[i - 3])
                 )
 
         if self.mode == "l":
@@ -412,7 +408,7 @@ class gm3s:
                     + self.dt[i] ** 3
                     * tau
                     / (eps * tau) ** 3
-                    * (beta[i] * self.P_p[i - 3] - self.alpha * self.T_p[i - 3])
+                    * (beta[i] * self.P_p[i - 3] - self.alpha[i] * self.T_p[i - 3])
                 )
 
         self.L_p = L_p
@@ -423,13 +419,9 @@ class gm3s:
         return self
 
     def power_spectrum(self, freq, sig_L_1s):
-        P0 = (
-            4 * self.tau * sig_L_1s
-        )  # power spectrum in the limit f -> 0 using the variance from the 1s model
+        P0 = 4 * self.tau * sig_L_1s  # power spectrum in the limit f -> 0 using the variance from the 1s model
         P_spec = (
-            P0
-            * (1 - self.K) ** 6
-            / (1 - 2 * self.K * np.cos(2 * np.pi * freq * self.dt) + self.K**2) ** 3
+            P0 * (1 - self.K) ** 6 / (1 - 2 * self.K * np.cos(2 * np.pi * freq * self.dt) + self.K**2) ** 3
         )  # eq. 20
         return P_spec
 
@@ -437,8 +429,7 @@ class gm3s:
         """Mostly correct?"""
 
         H = (
-            np.exp(-6 * np.pi * 1j * freq * self.dt)
-            / (1 - self.K * np.exp(-2 * np.pi * 1j * freq * self.dt)) ** 3
+            np.exp(-6 * np.pi * 1j * freq * self.dt) / (1 - self.K * np.exp(-2 * np.pi * 1j * freq * self.dt)) ** 3
         )  # eq. 19b
         phase = np.angle(H * 1j, deg=True)
 
@@ -449,9 +440,7 @@ class gm3s:
         eps = self.eps
         tau = self.tau
 
-        acf = np.exp(-t / (eps * tau)) * (
-            1 + t / (eps * tau) + 1 / 3 * (t / (eps * tau)) ** 2
-        )
+        acf = np.exp(-t / (eps * tau)) * (1 + t / (eps * tau) + 1 / 3 * (t / (eps * tau)) ** 2)
         return acf
 
 
@@ -587,12 +576,8 @@ class flowline:
         if isinstance(self.h0, np.ndarray):
             self.h = self.h0
         else:
-            self.h = np.zeros_like(
-                self.x, dtype="float"
-            )  # zero out initial height array
-            self.h[0 : idx - 1] = np.sqrt(
-                self.c * (self.L - self.x[0 : idx - 1])
-            )  # plastic ice profile as initial try
+            self.h = np.zeros_like(self.x, dtype="float")  # zero out initial height array
+            self.h[0 : idx - 1] = np.sqrt(self.c * (self.L - self.x[0 : idx - 1]))  # plastic ice profile as initial try
             self.h = np.nan_to_num(self.h)
 
         self.nyrs = self.tf - self.ts
@@ -634,12 +619,10 @@ class flowline:
             if np.floor(t) > self.yr:  # equal to for first step
                 self.yr = self.yr + 1
                 print(f"yr = {self.yr} | timestep = {t}")
-                self.P = np.ones_like(self.x, dtype="float") * (
-                    self.Pbar + self.sigP * self.rng.standard_normal(1)
-                )
-                self.T_wk = (
-                    self.Tbar + self.sigT * self.rng.standard_normal(1)
-                ) * np.ones_like(self.x) - self.gamma * self.zb  # todo: this should be based on the ice surface?
+                self.P = np.ones_like(self.x, dtype="float") * (self.Pbar + self.sigP * self.rng.standard_normal(1))
+                self.T_wk = (self.Tbar + self.sigT * self.rng.standard_normal(1)) * np.ones_like(
+                    self.x
+                ) - self.gamma * self.zb  # todo: this should be based on the ice surface?
                 # T_wk = (self.Tbar) * \
                 #        np.ones_like(self.x, dtype='float') - \
                 #        self.gamma * self.zb + \
@@ -654,43 +637,33 @@ class flowline:
 
             self.Qp = np.zeros_like(self.x, dtype="float")  # Qp equals j+1/2 flux
             self.Qm = np.zeros_like(self.x, dtype="float")  # Qm equals j+1/2 flux
-            self.dhdt = np.zeros_like(
-                self.x, dtype="float"
-            )  # zero out thickness rate of change
+            self.dhdt = np.zeros_like(self.x, dtype="float")  # zero out thickness rate of change
             for j in np.arange(0, self.nxs, 1):
                 if j == 0:
                     h_ave = (self.h[0] + self.h[1]) / 2
                     dhdx = (self.h[1] - self.h[0]) / (self.delx / 2)
                     dzdx = (self.dzbdx[0] + self.dzbdx[1]) / 2
-                    self.Qp[0] = (
-                        -self.K * (dhdx + dzdx) ** 3 * h_ave**5 * delt
-                    )  # flux at plus half grid point
+                    self.Qp[0] = -self.K * (dhdx + dzdx) ** 3 * h_ave**5 * delt  # flux at plus half grid point
                     self.Qm[0] = 0  # flux at minus half grid point
                     self.dhdt[0] = (self.b[0] - self.Qp[0]) / (self.delx / 2)
 
                 elif (self.h[j] <= 0) & (self.h[j - 1] > 0):  # glacier toe condition
                     h_ave = self.h[j - 1] / 2
-                    dhdx = (
-                        -self.h[j - 1] / self.delx
-                    )  # correction inserted ght nov-24-04
+                    dhdx = -self.h[j - 1] / self.delx  # correction inserted ght nov-24-04
                     dzdx = (self.dzbdx[j - 1] + self.dzbdx[j]) / 2
                     self.Qm[j] = -self.K * (dhdx + dzdx) ** 3 * h_ave**5 * delt
                     self.Qp[j] = 0
                     self.dhdt[j] = (self.b[j] + self.Qm[j]) / (self.delx / 2)
                     edge = j  # index of glacier toe - used for fancy plotting
 
-                elif (self.h[j] <= 0) & (
-                    self.h[j - 1] <= 0
-                ):  # beyond glacier toe - no glacier flux
+                elif (self.h[j] <= 0) & (self.h[j - 1] <= 0):  # beyond glacier toe - no glacier flux
                     self.dhdt[j] = self.b[j]
                     self.Qp[j] = 0
                     self.Qm[j] = 0
 
                 else:  # within the glacier
                     h_ave = (self.h[j + 1] + self.h[j]) / 2
-                    dhdx = (
-                        self.h[j + 1] - self.h[j]
-                    ) / self.delx  # correction inserted ght nov-24-04
+                    dhdx = (self.h[j + 1] - self.h[j]) / self.delx  # correction inserted ght nov-24-04
                     dzdx = (self.dzbdx[j] + self.dzbdx[j + 1]) / 2
                     self.Qp[j] = -self.K * (dhdx + dzdx) ** 3 * h_ave**5 * delt
 
@@ -773,13 +746,9 @@ class flowline:
 
         self.res = res
 
-        # %%
-
         mpl.rcParams["image.aspect"] = "auto"
         fig, ax = plt.subplots(1, 1, figsize=(4, 6), dpi=150)
-        im = ax.imshow(
-            res.h.to_numpy(), norm=mpl.colors.Normalize(vmin=-0.25, vmax=500)
-        )
+        im = ax.imshow(res.h.to_numpy(), norm=mpl.colors.Normalize(vmin=-0.25, vmax=500))
         ax.set_title("h")
         plt.colorbar(im, ax=ax)
         plt.show()
@@ -862,41 +831,40 @@ class flowline:
 
 ###############################################################################
 class flowline2d:
-    
-
     def __init__(
         self,
         x_gr,
         zb_gr,
         x_geom,
         w_geom,
-        x_init,
-        h_init,
-        temp,
         xmx,
+        sigT,
+        sigP,
+        T0,
+        P0,
         T=None,
         P=None,
-        t_stab=50,
-        bed_shape="rectangular",
-        t0=0,
-        n=3,
+        x_init=None,
+        h_init=None,
+        profile=None,
+        t_stab=None,
+        temp=None,
         gamma=6.5e-3,
+        dpdz=0,
         mu=0.65,
-        g=9.81,
+        g=-9.81,
         rho=916.8,
         fd=1.9e-24,
         fs=5.7e-20,
-        sigT=0.8,
-        sigP=1.0,
-        T0=14.70,
-        P0=5,
         delx=50,
         delt=0.0125 / 8,
         ts=0,
         tf=2025,
         dt_plot=100,
-        rt_plot=True,
+        rt_plot=False,
         xlim0=None,
+        min_thick=1,
+        hmb=True,
     ):
         """2d flowline model
 
@@ -972,87 +940,6 @@ class flowline2d:
         # # What is the distribution of trends?
         # # How does the run length work? Does it follow a Poisson process?
         # # Is the dynamical model consistent with a Gaussian pdf?
-        
-        
-        
-        
-        @njit(fastmath={"contract", "arcp", "nsz", "ninf", "nnan"})
-        def space_loop(h, b):
-            Qp = np.zeros(x.size)  # Qp equals j+1/2 flux
-            Qm = np.zeros(x.size)  # Qm equals j-1/2 flux
-            dhdt = np.zeros(x.size)  # zero out thickness rate of change array
-
-            # -----------------------------------------
-            # begin loop over space
-            # -----------------------------------------
-            for j in range(0, nxs):  # this is a kloudge -fix sometime
-                if j == 0:
-                    h_ave = (h[0] + h[1]) / 2
-                    dhdx = (h[1] - h[0]) / delx
-                    dzdx = (dzbdx[0] + dzbdx[1]) / 2
-                    Qp[0] = (
-                        -((dhdx + dzdx) ** 3)
-                        * h_ave**4
-                        * (rho * g) ** 3
-                        * (fd * h_ave + fs / h_ave)
-                    )  # flux at plus half grid point
-                    # Qm[0] = 0  # flux at minus half grid point
-                    dhdt[0] = (
-                        b[0]
-                        - Qp[0] / (delx / 2)
-                        - (Qp[0] + Qm[0]) / (2 * w[0]) * dwdx[0]
-                    )
-                elif (h[j] <= 0) & (h[j - 1] > 0):  # glacier toe condition
-                    # Qp[j] = 0
-                    h_ave = h[j - 1] / 2
-                    dhdx = -h[j - 1] / delx  # correction inserted ght nov-24-04
-                    dzdx = (dzbdx[j - 1] + dzbdx[j]) / 2
-                    Qm[j] = (
-                        -((rho * g) ** 3)
-                        * h_ave**4
-                        * (dhdx + dzdx) ** 3
-                        * (fd * h_ave + fs / h_ave)
-                    )
-                    dhdt[j] = (
-                        b[j]
-                        + Qm[j] / delx
-                        - (Qp[j] + Qm[j]) / (2 * w[j]) * dwdx[j]
-                    )
-                    edge = j  # index of glacier toe - used for fancy plotting
-                elif (h[j] <= 0) & (h[j - 1] <= 0):  # beyond glacier toe - no glacier flux
-                    dhdt[j] = b[j]  # todo: verify that this is actually being evaluated
-                    # Qp[j] = 0
-                    # Qm[j] = 0
-                else:  # within the glacier
-                    h_ave = (h[j + 1] + h[j]) / 2
-                    dhdx = (h[j + 1] - h[j]) / delx  # correction inserted ght nov-24-04
-                    dzdx = (dzbdx[j] + dzbdx[j + 1]) / 2
-                    Qp[j] = (
-                        -((rho * g) ** 3)
-                        * h_ave**4
-                        * (dhdx + dzdx) ** 3
-                        * (fd * h_ave + fs / h_ave)
-                    )
-                    h_ave = (h[j - 1] + h[j]) / 2
-                    dhdx = (h[j] - h[j - 1]) / delx
-                    dzdx = (dzbdx[j] + dzbdx[j - 1]) / 2
-                    Qm[j] = (
-                        -((rho * g) ** 3)
-                        * h_ave**4
-                        * (dhdx + dzdx) ** 3
-                        * (fd * h_ave + fs / h_ave)
-                    )
-                    dhdt[j] = (
-                        b[j]
-                        - (Qp[j] - Qm[j]) / delx
-                        - (Qp[j] + Qm[j]) / (2 * w[j]) * dwdx[j]
-                    )
-                dhdt[nxs - 1] = 0  # enforce no change at boundary
-            # ----------------------------------------
-            # end loop over space
-            # ----------------------------------------
-            h = np.clip(h + dhdt * delt, 0, 10000)
-            return h, edge
 
         if rt_plot:
             plt.ioff()
@@ -1061,14 +948,8 @@ class flowline2d:
         # #-----------------
         # #define parameters
         # #-----------------
-        # tf = tf + 1  # results in common-sense arguments. The last year executed is tf as supplied to the fn. 
-        nts = round(
-            np.floor((tf - ts) / delt)
-        )  # number of time steps ('round' used because need nts as integer)
-        nyrs = tf - ts
 
-        xmx = xmx - (xmx % delx) + delx  # round up xmx to the nearest delx
-        #xmx = xmx - (xmx % delx)  # round down xmx to the nearest delx
+        xmx = delx * round(xmx / delx)  # round to neaest delx
         x = np.arange(0, xmx, delx)  # x array
         nxs = len(x)
 
@@ -1078,212 +959,275 @@ class flowline2d:
         # ---------------------------------
         # different glacier bed geometries
         # ---------------------------------
+        self.load_profile(profile, x)
         zb = interp1d(x_gr, zb_gr)
         zb = zb(x)
         w = interp1d(x_geom, w_geom)
         w = w(x)
-        # w = np.clip(w, 700, None)
-        # w = 500 * np.ones(x.size)  # no width data in this version
         dzbdx = np.gradient(zb, x)  # slope of glacer bed geometries.
         dwdx = np.gradient(w, x)
 
-        # ----------------------------------------------------------------------------------------------
-        # alternative starting geometry for a glacierusing results from a previus integration
-        # stored in glac_init.mat
-        # probably only worth it for mass balance parameterizations similar to the default one we tried
-        # ----------------------------------------------------------------------------------------------
-        try:
-            h0 = interp1d(x_init, h_init, "linear")
-            h0 = h0(x)
-        except:
-            logging.warning(f'A value in x exceeds x_init for interpolation of h_init to h0. Proceeding with extrapolation. x_init.max() = {x_init.max()}, x.max() = {x.max()}')
-            h0 = interp1d(x_init, h_init, "linear", fill_value='extrapolate')
-            h0 = h0(x)
-        h = np.full(x.size, fill_value=h0)  # initialize height array todo: should this be a copy of h0?
+        # geometry errors/warnings
+        if any(dzbdx == 0):
+            logging.warning(f'Bed slope is zero at {(dzbdx == 0).argmax()}.')
+        if any(dzbdx[0:2] > 0):
+            logging.warning('The slope of the bed at the top of the glacier is positive. This may cause instabilities.')
 
         # initialize climate forcing
-        Tp = sigT * T[ts: tf]
-        Pp = sigP * P[ts: tf]  # initialize climate forcing
-        Tp[:t_stab] = 0  # todo: turn this into an argument
+        # tf = tf + 1  # results in common-sense arguments. The last year executed is tf as supplied to the fn.
+        self.nts = round(np.floor((tf - ts) / delt))  # number of time steps ('round' used because need nts as integer)
+        nyrs = tf - ts + 1
+        if T is None:
+            T = np.zeros(nyrs)
+        if P is None:
+            P = np.zeros(nyrs)
+        self.Tp = sigT * T
+        self.Pp = sigP * P
+        if temp is None:
+            temp = pd.Series(np.zeros(nyrs), index=np.arange(ts, tf + 1, 1))
+        if t_stab:
+            self.Tp.iloc[:t_stab] = 0
+            self.Pp.iloc[:t_stab] = 0
+            temp.iloc[:t_stab] = 0
+        self.ts = ts
+        self.tf = tf
+        self.temp = temp
+        self.T = T
+        self.P = P
+        self.t_stab = t_stab
 
-        # -----------------------------------------
-        # begin loop over time
-        # -----------------------------------------
-        yr = ts-1
+        # constants
+        self.sigT = sigT
+        self.sigP = sigP
+        self.P0 = P0
+        self.T0 = T0
+        self.mu = mu
+        self.gamma = gamma
+        self.rho = rho
+        self.g = g
+        self.min_thick = min_thick
+        self.nxs = nxs
+        self.delt = delt
+        self.dzbdx = dzbdx
+        self.dwdx = dwdx
+        self.fd = fd
+        self.fs = fs
+        self.x = x
+        self.zb = zb
+        self.nxs = nxs
+        self.delx = delx
+        self.w = w
+        
+        # functions
+        if callable(dpdz) is False:
+            self.dpdz = lambda x: dpdz * x
+        else:
+            self.dpdz = dpdz
+
+        # option flags
+        self.hmb = hmb
+        self.dt_plot = dt_plot
+        self.rt_plot = rt_plot
+
+        # runtime flags
+        self.no_error = True
+
+    def run(self, **kwargs):
+        if kwargs:
+            self.__dict__.update(kwargs)
+        if "profile" in kwargs.keys():
+            self.load_profile(self.profile, self.x)
+
+        # output
+        nouts = int((self.nts * self.delt) // 1)
+        self.edge_idx = np.full(nouts, fill_value=np.nan, dtype="int")
+        self.edge = np.full(nouts, fill_value=np.nan, dtype="float")
+        self.t = np.full(nouts, fill_value=np.nan, dtype="float")
+        self.T = np.full(nouts, fill_value=np.nan, dtype="float")
+        
+        self.gwb = np.full(nouts, fill_value=np.nan, dtype="float")
+        self.ela = np.full(nouts, fill_value=np.nan, dtype="float")
+        self.area = np.full(nouts, fill_value=np.nan, dtype="float")
+        self.h = np.full((nouts, self.nxs), fill_value=np.nan, dtype="float")
+        self.b = np.full((nouts, self.nxs), fill_value=np.nan, dtype="float")
+        self.melt = np.full((nouts, self.nxs), fill_value=np.nan, dtype="float")
+        self.ela_idx = np.full(nouts, fill_value=np.nan, dtype="int")
+        self.F = np.full((nouts, self.nxs), fill_value=np.nan, dtype="float")
+        self.P = np.full((nouts, self.nxs), fill_value=np.nan, dtype="float")
+
+        @nb.njit(fastmath={"contract", "arcp", "nsz", "afn", "reassoc"})
+        def space_loop(h, b, x, rho, g, nxs, delx, dzbdx, fd, fs, dwdx, w, delt, min_thick):
+            Qp = np.zeros(x.size)  # Qp equals j+1/2 flux
+            Qm = np.zeros(x.size)  # Qm equals j-1/2 flux
+            dhdt = np.zeros(x.size)  # zero out thickness rate of change array
+            rho_g_cu = (rho * g) ** 3  # precompute for speed
+            dzdx = (dzbdx[:-1] + dzbdx[1:]) / 2  # slope at plus half a grid point
+            # -----------------------------------------
+            # begin loop over space
+            # -----------------------------------------
+            # todo: I wonder if this should be evaluated backwards?
+            for j in range(0, nxs - 1):  # this is a kloudge -fix sometime
+                if j == 0:
+                    h_ave = (h[0] + h[1]) / 2
+                    dhdx = (h[1] - h[0]) / delx
+                    Qp[0] = (
+                        rho_g_cu * (dhdx + dzdx[j]) ** 3 * (fd * h_ave**5 + fs * h_ave**3)  # top of glacier qp
+                    )  # flux at plus half grid point
+                    # Qm[0] = 0  # flux at minus half grid point
+                    dhdt[0] = b[0] - Qp[0] / (delx / 2) - (Qp[0] + Qm[0]) / (2 * w[0]) * dwdx[0]
+                elif (h[j] <= 0) & (h[j - 1] > 1):  # glacier toe condition
+                    # Qp[j] = 0
+                    h_ave = h[j - 1] / 2
+                    dhdx = -h[j - 1] / delx  # correction inserted ght nov-24-04
+                    Qm[j] = rho_g_cu * (dhdx + dzdx[j - 1]) ** 3 * (fd * h_ave**5 + fs * h_ave**3)  # glacier toe qm
+                    dhdt[j] = b[j] + Qm[j] / delx - (Qp[j] + Qm[j]) / (2 * w[j]) * dwdx[j]
+                elif (h[j] == 0) & (h[j - 1] < 1):  # beyond glacier toe - no glacier flux
+                    dhdt[j] = b[j]  # todo: verify that this is actually being evaluated
+                    # Qp[j] = 0
+                    # Qm[j] = 0
+                else:  # within the glacier
+                    h_ave = (h[j + 1] + h[j]) / 2
+                    dhdx = (h[j + 1] - h[j]) / delx  # correction inserted ght nov-24-04
+                    Qp[j] = rho_g_cu * (dhdx + dzdx[j]) ** 3 * (fd * h_ave**5 + fs * h_ave**3)  # Within glacier qp
+                    h_ave = (h[j - 1] + h[j]) / 2
+                    dhdx = (h[j] - h[j - 1]) / delx
+                    Qm[j] = (
+                        rho_g_cu * (dhdx + dzdx[j - 1]) ** 3 * (fd * h_ave**5 + fs * h_ave**3)
+                    )  # within glacier qm
+                    dhdt[j] = b[j] - (Qp[j] - Qm[j]) / delx - (Qp[j] + Qm[j]) / (2 * w[j]) * dwdx[j]
+            dhdt[nxs - 1] = 0  # enforce no change at boundary
+            # ----------------------------------------
+            # end loop over space
+            # ----------------------------------------
+            # h = fast_clip(h + dhdt * delt, 0, 10000)
+            # h = np.minimum(10000, np.maximum(h + dhdt * delt, 0))
+            h = np.core.umath.maximum(h + dhdt * delt, 0)
+            edge = (
+                len(h) - np.searchsorted(h[::-1], min_thick) - 1
+            )  # very fast location of the terminus https://stackoverflow.com/questions/16243955/numpy-first-occurrence-of-value-greater-than-existing-value
+            F = Qm - Qp
+            return h, edge, F
+
+        yr = self.ts - 1  # - 1 because we start the time loop by incramenting the year
         idx_out = 0
         deltout = 1
-        nouts = int((nts * delt) // 1) 
-        edge_idx_out = np.full(nouts, fill_value=np.nan, dtype="int")
-        edge_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        t_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        T_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        P_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        gwb_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        ela_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        area_out = np.full(nouts, fill_value=np.nan, dtype="float")
-        h_out = np.full((nouts, nxs), fill_value=np.nan, dtype="float")
-        b_out = np.full((nouts, nxs), fill_value=np.nan, dtype="float")
 
-        if rt_plot:
-            fig, ax = self._init_plot()
+        if self.rt_plot:
+            self.fig, self.ax = self._init_plot()
 
-        for i in tqdm(range(0, nts), unit_scale=delt, unit='yrs', bar_format="{desc}: {percentage:2.0f}%|{bar}| {n:.1f}/{total:.1f} [{elapsed}<{remaining}, {rate_fmt}{postfix}", ascii=True, ncols=100):
-            t = delt * i  # time in years
+        h = self.h0  # define initial height
+        for i in tqdm(
+            range(0, self.nts),
+            unit_scale=self.delt,
+            unit="yrs",
+            bar_format="{desc}: {percentage:2.0f}%|{bar}| {n:.1f}/{total:.1f} [{elapsed}<{remaining}, {rate_fmt}{postfix}",
+            ascii=True,
+            ncols=100,
+        ):
+            t = self.delt * i  # time in years
+
             # define climate every year
-            if t == np.floor(t):
+            if t == t // 1:
                 yr = yr + 1
-                # print(f"yr = {yr}")
-                P = np.ones(x.size) * (P0 + 1 * Pp[yr])
-                T_wk = (T0 + 1 * Tp[yr]) * np.ones(x.size) - gamma * (zb + h)
-                T_wk = T_wk + temp(yr)
-                melt = np.core.umath.clip(mu * T_wk, 0, 100000)
+                
+                if self.hmb:
+                    T_wk = (self.T0 + self.Tp[yr]) * np.ones(self.x.size) - self.gamma * (
+                        self.zb + h
+                    )  # adding h to zb = altitude-mass-balance feedback
+                    P = (self.P0 + self.Pp[yr]) * np.ones(self.x.size) - self.dpdz(self.zb + h)
+                else:
+                    T_wk = (self.T0 + self.Tp[yr]) * np.ones(
+                        self.x.size
+                    ) - self.gamma * self.zb  # adding h to zb = altitude-mass-balance feedback
+                    P = (self.P0 + self.Pp[yr]) * np.ones(self.x.size) - self.dpdz(self.zb)
+                T_wk = T_wk + self.temp[yr]  # add temperature forcing
+
+                melt = np.maximum(self.mu * T_wk, 0)  # this is apparently faster than clip for numpy 1.17
                 b = P - melt
 
             # loop over space (solve SIA)
             # this is the entire model, really
-            h, edge = space_loop(h, b)
-
-            # ----------------------------
-            # plot glacier every so often
-            # save h , and edge
-            # ----------------------------
+            h, edge_idx, F = space_loop(
+                h,
+                b,
+                self.x,
+                self.rho,
+                self.g,
+                self.nxs,
+                self.delx,
+                self.dzbdx,
+                self.fd,
+                self.fs,
+                self.dwdx,
+                self.w,
+                self.delt,
+                self.min_thick,
+            )
 
             if t / deltout == np.floor(t / deltout):
                 # Save outputs
-                area = np.sum(w[: edge+1]) * delx
-                bal = b * w * delx  # mass added in a given cell units are m^3 yr^-1
-                gwb_out[idx_out] = bal[: edge+1].sum()  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
-                T_out[idx_out] = (T0 + 1 * Tp[yr])  # temp at the top of the glacier todo: verify this
-                P_out[idx_out] = P[0]
-                t_out[idx_out] = t
-                edge_idx_out[idx_out] = edge
-                edge_out[idx_out] = edge * delx
-                h_out[idx_out, :] = h
-                area_out[idx_out] = area
+                area = np.sum(self.w[:edge_idx]) * self.delx
+                bal = b * self.w * self.delx  # mass added in a given cell units are m^3 yr^-1
+                # bal[edge+1] =
+                self.gwb[idx_out] = bal[
+                    :edge_idx
+                ].sum()  # should add up all the mass up to the edge, and be zero in equilibrium (nearly zero)
+                self.T[idx_out] = self.T0 + self.Tp[yr] + self.temp[yr]  # input temperature
+                
+                self.t[idx_out] = t + self.ts
+                self.edge_idx[idx_out] = edge_idx
+                self.edge[idx_out] = edge_idx * self.delx
+                self.h[idx_out, :] = h
+                self.area[idx_out] = area
                 ela_idx = np.abs(b).argmin()
-                ela_out[idx_out] = zb[ela_idx] + h[ela_idx]
-                b_out[idx_out, :] = b.copy()
-                b_out[idx_out, edge:] = np.nan
-
+                self.ela_idx[idx_out] = ela_idx
+                self.ela[idx_out] = self.zb[ela_idx] + h[ela_idx]
+                self.b[idx_out, :] = b
+                # b_out[idx_out, edge+1:] = np.nan
+                self.P[idx_out, :] = P
+                self.melt[idx_out, :] = melt
+                self.F[idx_out, :] = F
                 idx_out = idx_out + 1
-            if (
-                (t / dt_plot == np.floor(t / dt_plot)) | (i == nts - 1)
-            ) & rt_plot:  # force plotting on the last time step
-                print("outputting")
-                pad = 10
-                x1 = x[: edge + pad]
-                z0 = zb[: edge + pad]
-                z1 = zb[: edge + pad] + h[: edge + pad]
 
-                try:
-                    ax[0, 1].collections[
-                        0
-                    ].remove()  # remove the glacier profile before redrawing
-                except:
-                    pass
-                poly = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc="lightblue")
-                ax[0, 1].plot(
-                    x1 / 1000,
-                    z0,
-                    c="black",
-                    lw=2,
-                )
-                ax[0, 0].plot(
-                    t_out,
-                    scipy.ndimage.uniform_filter1d(area_out / 1e6, 20, mode="mirror"),
-                    c="black",
-                )
-                ax[1, 0].plot(
-                    t_out,
-                    scipy.ndimage.uniform_filter1d(ela_out, 20, mode="mirror"),
-                    c="black",
-                )
-                ax[2, 0].plot(t_out, T_out, c="blue", lw=0.25)
-                ax[2, 1].plot(
-                    t_out,
-                    scipy.ndimage.uniform_filter1d(edge_out, 20, mode="mirror") / 1000,
-                    c="black",
-                    lw=2,
-                )
-                ax[3, 0].plot(t_out, gwb_out / area_out, c="blue", lw=0.25)
-                ax[3, 1].plot(
-                    t_out,
-                    # scipy.ndimage.uniform_filter1d(
-                    #     np.cumsum(gwb_out / area_out), 20, mode="mirror"
-                    # ),
-                    np.cumsum(gwb_out / area_out) - np.cumsum((gwb_out / area_out).mean()),
-                    c="blue",
-                    lw=2,
-                )
-
-                # update the plot
-                fig.canvas.flush_events()
-                fig.canvas.draw()
+                if self.rt_plot:
+                    self._rt_plot(t)
 
                 # -----------------------------------------
                 # end loop over time
                 # -----------------------------------------
-        if rt_plot:
-            if xlim0 is None:
-                xlim0 = ts
-                
-            ax[0, 1].set_xlim(xlim0, x1.max() / 1000 * 1.1)
-            ax[1, 0].set_xlim(xlim0, tf)
-            ax[2, 0].plot(
-                t_out,
-                scipy.ndimage.uniform_filter1d(T_out, 20, mode="mirror"),
-                c="blue",
-                lw=2,
-            )
-            ax[2, 0].set_xlim(xlim0, tf)
-            ax[2, 1].set_xlim(xlim0, tf)
-            ax[3, 0].plot(
-                t_out,
-                scipy.ndimage.uniform_filter1d(gwb_out / area_out, 20, mode="mirror"),
-                c="blue",
-                lw=2,
-            )
-            ax[3, 0].set_xlim(xlim0, tf)
-            ax[3, 1].plot(
-                t_out,
-                scipy.ndimage.uniform_filter1d(
-                    np.cumsum(gwb_out / area_out), 20, mode="mirror"
-                ),
-                c="blue",
-                lw=2,
-            )
-            ax[3, 1].set_xlim(xlim0, tf)
-            plt.draw()
 
-        # collect output
-        self.T = T_out
-        self.P = P_out
-        self.t = t_out + ts
-        self.edge_idx = edge_idx_out
-        self.edge = edge_out
-        self.gwb = gwb_out
-        self.b = b_out
-        self.ela = ela_out
-        self.h = h_out
-        self.x = x
-        self.zb = zb
-        self.ts = ts
-        self.tf = tf
-        self.nxs = nxs
-        self.delx = delx
-        self.area = area_out
-        self.w = w
-        self.x_init = x_init
-        self.h_init = h_init
-        self.temp = temp
-        self.sigT = sigT
-        self.sigP = sigP
-        self.P0 = P0
-        self.T0 = T0        
+        if self.h[-1, 0] is np.nan:
+            self.no_error = False
+        else:
+            self.no_error = True
 
-        return None
+        return copy.deepcopy(self)
 
-    def plot(self, xlim0=None, compare_fp=None):
+    def load_profile(self, profile, x):
+        # load initial profile
+        if profile:
+            try:
+                h_init = profile.h[-1, :].copy()
+                x_init = profile.x.copy()
+            except:
+                with open(profile, 'rb') as f:
+                    last_run = dill.load(f)
+                h_init = np.array(last_run.h[-1, :])
+                x_init = np.array(last_run.x)
+
+        try:
+            h0 = interp1d(x_init, h_init, "linear")
+            h0 = h0(x)
+        except:
+            logging.warning(
+                f"A value in x exceeds x_init for interpolation of h_init to h0. Proceeding with extrapolation. x_init.max() = {x_init.max()}, x.max() = {x.max()}"
+            )
+            h0 = interp1d(x_init, h_init, "linear", fill_value="extrapolate")
+            h0 = h0(x)
+        self.h0 = h0
+        return x_init, h_init
+
+    def plot_full(self, xlim0=None, smooth=20):
         """This is a docstring
 
         This is the longer portion of the docstring.
@@ -1301,162 +1245,243 @@ class flowline2d:
         """
         if xlim0 is None:
             xlim0 = self.ts
-        
-        pad = 10
-        pedge = int(self.edge_idx[-300:].mean()) + pad
+
+        pad = 20
+        pedge = int(self.edge_idx[-1]) + pad
         self.pedge = pedge
         x1 = self.x[:pedge]
         z0 = self.zb[:pedge]
-        z1 = z0 + self.h[-300:, :pedge].mean(axis=0)
+        z1 = z0 + self.h[-1, :pedge]
 
         fig, ax = self._init_plot()
-        poly1 = ax[0, 1].fill_between(x1 / 1000, z0, z1, fc="lightblue", ec="lightblue")
+        ax[0, 0].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.area / 1e6, smooth, mode="mirror"),
+            c="black",
+            label=f"MA-{smooth}",
+        )
+        poly1 = ax[0, 1].fill_between(
+            x1 / 1000,
+            z0,
+            z1,
+            fc="lightblue",
+            ec="lightblue",
+            label=f"{self.tf} profile",
+        )
         ax[0, 1].plot(
             x1 / 1000,
             z0,
             c="black",
             lw=2,
         )
-        ax[0, 0].plot(
-            self.t,
-            scipy.ndimage.uniform_filter1d(self.area / 1e6, 20, mode="mirror"),
-            c="black",
+        ax[0, 2].hist(
+            self.gwb / self.area,
+            bins=100,
+            density=True,
+        )
+        ax[0, 2].axvline(x=(self.gwb / self.area).mean(), ls="--", lw=2, c="black", label="Mean")
+        ax[0, 2].annotate(
+            f"b_s = {np.std(self.gwb / self.area):0.4f}\n" f"mean = {np.mean(self.gwb/self.area):0.4f}",
+            xy=(0.05, 0.05),
+            xycoords="axes fraction",
+        )
+        ax[1, 2].hist(
+            self.edge / 1000,
+            bins=30,
+            density=True,
+        )
+        ax[1, 2].axvline(x=(self.edge / 1000).mean(), ls="--", lw=2, c="black", label="Mean")
+        ax[1, 2].annotate(
+            f"$\sigma_l$ = {np.std(self.edge / 1000):0.4f}\n" f"mean = {np.mean(self.edge):0.4f}",
+            xy=(0.05, 0.05),
+            xycoords="axes fraction",
         )
         ax[0, 0].set_xlim(xlim0, self.tf)
         ax[1, 0].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.ela, 20, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.ela, smooth, mode="mirror"),
             c="black",
+            label=f"MA-{smooth}",
         )
         ax[1, 0].set_xlim(xlim0, self.tf)
         ax[2, 1].set_xlim(0, x1.max() / 1000 * 1.1)
-        #ax[2, 0].plot(self.t, self.T, c="blue", lw=0.25, alpha=0.25)
+        # ax[2, 0].plot(self.t, self.T, c="blue", lw=0.25, alpha=0.25)
         ax[2, 0].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.T, 20, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.T, smooth, mode="mirror"),
             c="black",
             lw=1,
-            alpha=0.5
+            alpha=0.5,
+            label=f"MA-{smooth}",
         )
         ax[2, 0].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(self.T, 300, mode="mirror"),
             c="red",
             lw=1,
+            label="MA-300",
         )
         ax[2, 0].set_xlim(xlim0, self.tf)
         ax[2, 1].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.edge, 20, mode="mirror") / 1000,
+            self.edge / 1000,
             c="black",
             lw=2,
-        )
-        ax[2, 1].plot(
-            self.t,
-            scipy.ndimage.uniform_filter1d(self.edge, 300, mode="mirror") / 1000,
-            c="pink",
-            lw=2,
-        )
-        ax[2, 1].plot(
-            self.t,
-            scipy.ndimage.uniform_filter1d(self.edge, 1000, mode="mirror") / 1000,
-            c="red",
-            lw=2,
+            label=f"Length",
         )
         ax[2, 1].set_xlim(xlim0, self.tf)
-        ax[2, 2].plot(
-            self.t,
-            np.cumsum(self.edge)/np.arange(self.ts, self.tf),
-            c='black',
+        ax[2, 2].scatter(
+            scipy.ndimage.uniform_filter1d(self.edge / 1000, 100, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 100, mode="mirror"),
+            c=self.t,
+            cmap="viridis",
+            s=2,
+            label="MA-100",
         )
-        ax[2, 2].set_xlim(xlim0, self.tf)
-        #ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
+        # ax[2, 2].set_xlim(xlim0, self.tf)
+        # ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
         ax[3, 0].plot(
             self.t,
-            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 20, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.gwb / self.area, smooth, mode="mirror"),
             c="black",
             lw=1,
             alpha=0.5,
+            label=f"MA-{smooth}",
         )
         ax[3, 0].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(self.gwb / self.area, 300, mode="mirror"),
             c="red",
             lw=1,
+            label="MA-300",
         )
         ax[3, 0].set_xlim(xlim0, self.tf)
         ax[3, 1].plot(
             self.t,
             scipy.ndimage.uniform_filter1d(
-                np.cumsum(self.gwb / self.area)
-                - np.cumsum(np.full_like(self.gwb, fill_value=(self.gwb / self.area).mean()))
-                , 20, mode="mirror"
+                np.cumsum(self.gwb / self.area),
+                smooth,
+                mode="mirror",
             ),
             c="blue",
             lw=2,
+            label=f"MA-{smooth}",
         )
         ax[3, 1].set_xlim(xlim0, self.tf)
-        ax[3, 2].plot(
-            self.t,
-            scipy.ndimage.uniform_filter1d(self.gwb / self.area, 300, mode='mirror'),
-            c='blue',
+        scat = ax[3, 2].scatter(
+            scipy.ndimage.uniform_filter1d(self.h.mean(axis=1), smooth, mode="mirror"),
+            scipy.ndimage.uniform_filter1d(self.edge / 1000, smooth, mode="mirror"),
+            c=self.t,
+            cmap="viridis",
+            s=2,
+            label=f"MA-{smooth}",
         )
-        ax[3, 2].set_xlim(xlim0, self.tf)
+        fig.colorbar(scat, ax=ax[2:, 2], label="Year")
+        for axis in ax.ravel():
+            try:
+                axis.legend(loc="upper left")
+            except:
+                pass
 
-        # plot extras
-        if compare_fp:
-            with open(compare_fp, "rb") as f:
-                anth = dill.load(f)
-            # anth = pd.DataFrame().from_dict(anth)
-            anth_h = anth.pop("h")
-            anth = pd.DataFrame.from_dict(anth)
-            self.anth = anth
+        return fig, ax
 
-            pad = 10
-            pedge = int(anth["edge"].iloc[-1] / self.delx + pad)
-            self.pedge = pedge
-            x2 = self.x[:pedge]
-            z1 = self.zb[:pedge]
-            z2 = z1 + anth_h[-1][:pedge]
+    def plot(self, smooth=1):
+        def sm(d):
+            return scipy.ndimage.uniform_filter1d(d, smooth, mode="mirror")
+        
+        fig, ax = plt.subplots(2, 2, layout='constrained', dpi=200)
+        pad = 20
+        pedge = int(self.edge_idx[-1]) + pad
+        self.pedge = pedge
+        x1 = self.x[:pedge]
+        z0 = self.zb[:pedge]
+        z1 = z0 + self.h[-1, :pedge]
+        poly1 = ax[0, 0].fill_between(
+            x1 / 1000,
+            z0,
+            z1,
+            fc="lightblue",
+            ec="lightblue",
+            label=f"yr={self.tf} profile",
+        )
+        ax[0, 0].plot(
+            x1 / 1000,
+            z0,
+            c="black",
+            lw=2,
+        )
+        ax[0, 1].plot(self.t, sm(self.gwb / self.area), label='Sp. MB', c='black')
+        ax01b = ax[0, 1].twinx()
+        ax01b.plot(
+            self.t,
+            self.h.max(axis=1),
+            c='grey',
+        )
+        ax[0, 1].plot(  # just for the legend
+            [None],
+            [None],
+            c='grey',
+            label=f"Max H",
+        )
 
-            poly2 = ax[0, 1].fill_between(x2 / 1000, z1, z2, fc="none", ec="lightblue")
-            if len(x1) > len(x2):
-                poly1.set_hatch("....")
-                poly1.set_facecolor("none")
-                poly2.set_facecolor("lightblue")
-            else:
-                poly1.set_facecolor("lightblue")
-                poly2.set_hatch("....")
+        ax[1, 0].plot(
+            self.t,
+            scipy.ndimage.uniform_filter1d(self.T, 30, mode="mirror"),
+            c="black",
+            lw=1,
+            alpha=0.5,
+            label=f"T (MA-30)",
+        )
+        ax10b = ax[1, 0].twinx()
+        ax10b.plot(
+            self.t,
+            sm(self.ela),
+            c='blue',
+            ls='--',
+            lw=1,
+            label=f"ELA",
+        )
+        ax[1, 0].plot(  # just for the legend
+            [None],
+            [None],
+            c='blue',
+            ls='--',
+            lw=1,
+            label=f"ELA",
+        )
 
-            anth["T_sm"] = scipy.ndimage.uniform_filter1d(anth["T"], 20, mode="mirror")
-            anth["edge_sm"] = (
-                scipy.ndimage.uniform_filter1d(anth["edge"], 20, mode="mirror") / 1000
-            )
-            anth["bal_sm"] = scipy.ndimage.uniform_filter1d(
-                anth["bal"] / anth["area"], 20, mode="mirror"
-            )
-            anth["cumbal_sm"] = scipy.ndimage.uniform_filter1d(
-                np.cumsum(anth["bal"] / anth["area"]), 20, mode="mirror"
-            )
-            anth["ela_sm"] = scipy.ndimage.uniform_filter1d(
-                anth["ela"], 20, mode="mirror"
-            )
-            ax[0, 0].plot(anth.t, anth["area"] / 1e6, c="black", lw=2, ls="dashed")
-            ax[1, 0].plot(
-                anth.t,
-                anth["ela_sm"],
-                c="red",
-                lw=2,
-            )
-            ax[2, 0].plot(anth.t, anth["T_sm"], c="red", lw=2)
-            ax[2, 0].plot(anth.t, anth["T"], c="red", lw=0.25)
-            ax[2, 1].plot(anth.t, anth["edge_sm"], c="black", lw=2, ls="dashed")
-            ax[3, 0].plot(anth.t, anth["bal_sm"], c="red", lw=2)
-            ax[3, 0].plot(anth.t, anth["bal"] / anth.area, c="red", lw=0.25)
-            ax[3, 1].plot(anth.t, anth["cumbal_sm"], c="red", lw=2)
-            plt.tight_layout()
+        ax[1, 1].plot(
+            self.t,
+            self.edge / 1000,
+            c="black",
+            lw=2,
+            label=f"Length",
+        )
+        ax11b = ax[1, 1].twinx()
+        ax11b.plot(
+            self.t,
+            self.area / 1e6,
+            c='red',
+            ls='--',
+            lw=1,
+        )
+        ax[1, 1].plot(  # just for the legend
+            [None],
+            [None],
+            c='red',
+            ls='--',
+            lw=1,
+            label=f"Area",
+        )
 
-        return fig
+        ax01b.grid(None)
+        ax10b.grid(None)
+        ax11b.grid(None)
+        for axis in ax.ravel():
+            axis.grid(which='both', axis='both', ls=':', c='grey')
+            axis.legend()
+
+        return fig, ax
 
     def to_pickle(self, fp):
         with open(fp, "wb") as f:
@@ -1471,28 +1496,74 @@ class flowline2d:
             bal=self.gwb,
             edge=self.edge_idx,
             edge_m=self.edge,
-            ela=self.ela
+            ela=self.ela,
         )
         df = pd.DataFrame(d, index=self.t)
         return df
-    
+
+    def to_xarray(self):
+        ds = xr.Dataset(
+            data_vars=dict(
+                T=(["time"], self.T),
+                P=(["time"], self.P),
+                edge_idx=(["time"], self.edge_idx),
+                edge=(["time"], self.edge),
+                gwb=(["time"], self.gwb),
+                b=(["time", "x"], self.b),
+                ela=(["time"], self.ela),
+                h=(["time", "x"], self.h),
+                area=(["time"], self.area),
+                w=(["x"], self.w),
+                zb=(["x"], self.zb),
+            ),
+            coords=dict(
+                time=self.t,
+                x=self.x,
+            ),
+            attrs=dict(
+                ts=self.ts,
+                tf=self.tf,
+                nxs=self.nxs,
+                delx=self.delx,
+                sigT=self.sigT,
+                sigP=self.sigP,
+                P0=self.P0,
+                T0=self.T0,
+                Tref=self.Tref,
+                Pref=self.Pref,
+                nrun=self.nrun,
+                ref_period=self.ref_period,
+            ),
+        )
+        return ds
+
     def _init_plot(self):
-        fig = plt.figure(figsize=(18, 10), dpi=100, layout='tight')
+        fig = plt.figure(figsize=(18, 10), dpi=100, layout="constrained")
         gs = gridspec.GridSpec(4, 3, figure=fig, height_ratios=(1, 1, 1, 1))
         ax = np.empty((4, 3), dtype="object")
-        plt.show(block=False)  # for live plotting, though maybe block=True would wait for the plot to open before running?
+        plt.show(
+            block=False
+        )  # for live plotting, though maybe block=True would wait for the plot to open before running?
 
         ax[0, 0] = fig.add_subplot(gs[0, 0])
         ax[0, 0].set_xlabel("Time (years)")
         ax[0, 0].set_ylabel("Glacier Area ($km^2$)")
 
+        ax[0, 1] = fig.add_subplot(gs[0:2, 1])
+        ax[0, 1].set_xlabel("Distance (km)")
+        ax[0, 1].set_ylabel("Elevation (m)")
+
+        ax[0, 2] = fig.add_subplot(gs[0, 2])
+        ax[0, 2].set_xlabel("Mass balance (m)")
+        ax[0, 2].set_ylabel("Probability density")
+
         ax[1, 0] = fig.add_subplot(gs[1, 0])
         ax[1, 0].set_xlabel("Time (years)")
         ax[1, 0].set_ylabel("Equilibrium Line Altitude (m)")
 
-        ax[0, 1] = fig.add_subplot(gs[0:2, 1])
-        ax[0, 1].set_xlabel("Distance (km)")
-        ax[0, 1].set_ylabel("Elevation (m)")
+        ax[1, 2] = fig.add_subplot(gs[1, 2])
+        ax[1, 2].set_xlabel("Length (km)")
+        ax[1, 2].set_ylabel("Probability density")
 
         ax[2, 0] = fig.add_subplot(gs[2, 0])
         ax[2, 0].set_ylabel("T ($^o$C)")
@@ -1501,8 +1572,9 @@ class flowline2d:
         ax[2, 1].set_ylabel("L (km)")
 
         ax[2, 2] = fig.add_subplot(gs[2, 2])
-        ax[2, 2].set_ylabel("L (km)")
-        
+        ax[2, 2].set_xlabel("L (km)")
+        ax[2, 2].set_ylabel("Bal (m $yr^{-1}$)")
+
         ax[3, 0] = fig.add_subplot(gs[3, 0])
         ax[3, 0].set_ylabel("Bal (m $yr^{-1}$)")
         ax[3, 0].set_xlabel("Time (years)")
@@ -1512,8 +1584,8 @@ class flowline2d:
         ax[3, 1].set_ylabel("Cum. bal. (m)")
 
         ax[3, 2] = fig.add_subplot(gs[3, 2])
-        ax[3, 2].set_xlabel("Time (years)")
-        ax[3, 2].set_ylabel("Mean Cum. bal. (m)")
+        ax[3, 2].set_xlabel("Mean thickness (m)")
+        ax[3, 2].set_ylabel("Length (km)")
 
         for axis in ax.ravel():
             if axis is not None:  # this handles gridspec col/rowspans > 1
@@ -1522,3 +1594,80 @@ class flowline2d:
         plt.tight_layout()
 
         return fig, ax
+
+    def _rt_plot(self, t, i):
+        if (t / self.dt_plot == np.floor(t / self.dt_plot)) | (
+            i == self.nts - 1
+        ):  # force plotting on the last time step
+            print("outputting")
+            pad = 10
+            x1 = self.x[: self.edge + pad]
+            z0 = self.zb[: self.edge + pad]
+            z1 = self.zb[: self.edge + pad] + self.h[: self.edge + pad]
+
+            try:
+                self.ax[0, 1].collections[0].remove()  # remove the glacier profile before redrawing
+            except:
+                pass
+            poly = self.ax[0, 1].fill_between(x1 / 1000, z0, z1, fc="lightblue")
+            self.ax[0, 1].plot(
+                x1 / 1000,
+                z0,
+                c="black",
+                lw=2,
+            )
+            self.ax[0, 0].plot(
+                self.t,
+                scipy.ndimage.uniform_filter1d(self.area / 1e6, 20, mode="mirror"),
+                c="black",
+            )
+            self.ax[1, 0].plot(
+                self.t,
+                scipy.ndimage.uniform_filter1d(self.ela, 20, mode="mirror"),
+                c="black",
+            )
+            self.ax[2, 0].plot(self.t, self.t, c="blue", lw=0.25)
+            self.ax[2, 1].plot(
+                self.t,
+                scipy.ndimage.uniform_filter1d(self.edge, 20, mode="mirror") / 1000,
+                c="black",
+                lw=2,
+            )
+            self.ax[3, 0].plot(self.t, self.gwb / self.area, c="blue", lw=0.25)
+            self.ax[3, 1].plot(
+                self.t,
+                # scipy.ndimage.uniform_filter1d(
+                #     np.cumsum(self.gwb / self.area), 20, mode="mirror"
+                # ),
+                np.cumsum(self.gwb / self.area) - np.cumsum((self.gwb / self.area).mean()),
+                c="blue",
+                lw=2,
+            )
+
+            # update the plot
+            self.fig.canvas.flush_eveself.nts()
+            self.fig.canvas.draw()
+
+        if t == self.tf:
+            plt.draw()
+
+
+def calc_ela(P0, T0, gamma, mu, h=None):
+    # this seems to be accurate with elev mb feedback??
+    if np.asarray(h).any():  # idk if this part is right
+        T0 = T0 - h * gamma
+    ela = T0 / gamma - P0 / (mu * gamma)
+    return ela
+
+
+def calc_Leq(A, w, bt, db, L=None):
+    if np.ndim(w) != 0:
+        w = np.mean(w)
+    return A / w * -db / bt
+
+
+def calc_tau(model):
+    H = np.array([model.h[i, (model.ela_idx[i]) : (model.edge_idx[i])].mean() for i in range(len(model.ela_idx))])
+    bt = np.array([model.b[i, (model.ela_idx[i] - 10) : (model.edge_idx[i])].mean() for i in range(len(model.ela_idx))])
+    tau = -H / bt
+    return tau, H, bt
