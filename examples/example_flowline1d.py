@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 
-import numpy as np
-import gm
-
+from gm import gm
 
 # Example of flowline model specification
 params = dict(
