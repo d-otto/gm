@@ -1,2 +1,7 @@
-from gm.flowline2d import *
-from gm.gm import *
+import gm.flowline2d
+from gm.gm3s import gm3s
+
+__all__ = [
+    'flowline2d',
+    'gm3s'
+]
