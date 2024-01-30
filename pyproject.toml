@@ -1,0 +1,24 @@
+[project]
+name = "gm"
+version = "0.0.1"
+description = "Various simple glacier models"
+authors = [
+    {name = "Daniel Otto", email = "drotto@uw.edu"}
+]
+license = {text = "LICENSE"}
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "xarray",
+    "tqdm",
+    "numba",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = "src"
