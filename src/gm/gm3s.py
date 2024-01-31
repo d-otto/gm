@@ -221,8 +221,8 @@ class gm3s:
 
         self.Lp = Lp
         self.L = self.L_bar + self.Lp
-        self.Lp_eq = self.tau * self.beta * self.bt_p + self.L_bar
-        self.dL = abs(self.L[0] - self.Lp_eq)
+        self.Lp_eq = self.tau * self.beta * self.bt_p
+        self.dL = np.abs(self.Lp_eq[-1])
 
         return self
 

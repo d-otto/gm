@@ -22,28 +22,14 @@ class gm1s:
         tau=None,
         g=-9.81,
         rho=916.8,
-        b_p=0,
+        bp=0,
         dbdt=None,
         mode=None,
     ):
-        if isinstance(dbdt, (int, float)) & (dbdt is not None):
-            self.mode = "linear"
-            self.bt_p = np.full_like(ts, fill_value=dbdt) + bt
-            self.b_p = np.full_like(ts, fill_value=dbdt)
-            self.bt_eq = bt
-        elif isinstance(b_p, (collections.abc.Sequence, np.ndarray)):
-            self.mode = "discrete"
-            self.bt_p = bt + b_p
-            self.bt_eq = bt
-            self.b_p = b_p
-        elif isinstance(b_p, (int, float)):
-            # step change
-            # todo: implement sol'n for step change
-            self.mode = "discrete"
-            b_p = np.full_like(ts, fill_value=b_p)
-            self.bt_p = bt + b_p
-            self.bt_eq = bt
-            self.b_p = b_p
+        
+        self.btp = bt + bp
+        self.bt_eq = bt
+        self.bp = bp
 
         self.ts = ts
         self.dt = np.diff(ts, prepend=-1)
@@ -57,48 +43,46 @@ class gm1s:
         else:
             self.tau = tau
 
-        if self.mode == "linear":
-            self.linear()
-        elif self.mode == "discrete":
-            self.discrete()
 
     def linear(self):
-        self.tau = -self.H / self.bt_p
-        self.L_eq = self.tau * self.beta * self.bt_p * (self.ts - self.tau)  # todo: what is this last term?
-        self.L_p = np.zeros_like(self.ts, dtype="float")
+        self.tau = -self.H / self.btp
+        self.Lp_eq = self.tau * self.beta * self.btp * (self.ts - self.tau)  # todo: what is this last term?
+        self.Lp = np.zeros_like(self.ts, dtype="float")
 
         # Christian et al eq. 4
         if self.mode == "linear":
             for i, t in enumerate(self.ts):
-                if self.bt_p[i] == 0:
-                    self.L_p[i] = 0
+                if self.btp[i] == 0:
+                    self.Lp[i] = 0
                     continue
 
-                self.L_p[i] = (
-                    self.tau[i] * self.beta * self.bt_p[i] * (t - self.tau[i] * (1 - np.exp(-t / self.tau[i])))
+                self.Lp[i] = (
+                        self.tau[i] * self.beta * self.btp[i] * (t - self.tau[i] * (1 - np.exp(-t / self.tau[i])))
                 )
 
-        self.L = self.L_bar + np.cumsum(self.L_p)
+        self.L = self.L_bar + np.cumsum(self.Lp)
 
-    def discrete(self):
-        self.L_p = np.empty_like(self.ts, dtype="float")
+    def run(self):
+        self.Lp = np.empty_like(self.ts, dtype="float")
 
         for i, t in enumerate(self.ts):
             # Roe and Baker (2014) eq. 8
             if i == 0:
-                self.L_p[i] = self.beta * t * self.b_p[i]
+                self.Lp[i] = self.beta * t * self.bp[i]
                 continue
-            self.L_p[i] = (1 - self.dt[i] / self.tau) * self.L_p[i - 1] + self.beta * self.dt[i] * self.b_p[i]
-        self.L = self.L_bar + self.L_p
-        self.L_eq = self.tau * self.beta * self.bt_p
-        self.dL = abs(self.L_p[-1])
+            self.Lp[i] = (1 - self.dt[i] / self.tau) * self.Lp[i - 1] + self.beta * self.dt[i] * self.bp[i]
+        self.L = self.L_bar + self.Lp
+        self.Lp_eq = self.tau * self.beta * self.btp
+        self.dL = abs(self.Lp_eq[-1])
+        
+        return self
 
     def to_xarray(self):
         import xarray as xr
 
         ds = xr.Dataset(
             data_vars=dict(
-                bp=("t", self.b_p),
+                bp=("t", self.bp),
                 Pp=("t", self.Pp),
                 Tp=("t", self.Tp),
             ),
