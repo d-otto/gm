@@ -36,4 +36,4 @@ jobs:
         pytest
     - name: Run example notebooks
       run: |
-          jupyter nbconvert --to notebook --execute notebooks/example_feq.ipynb
+          jupyter nbconvert --to notebook --execute examples/example_feq.ipynb
