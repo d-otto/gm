@@ -47,8 +47,8 @@ class TestFeq:
             ts=t,
         )
         res = gm3s(tau=tau, **params_3s).run()
-        res.L_p = res.L_p
-        res.feq = res.L_p / (res.L_eq - res.L_bar)
+        res.Lp = res.Lp
+        res.feq = res.Lp / (res.Lp_eq - res.L_bar)
         res.feq = res.feq[::100]  # resample from 20k to 200
         res.feq_analytic = calc_feq(t, tau)  # compare w/ analytical result
         error = (res.feq_analytic - res.feq)[1:]  # first value is nan
@@ -91,7 +91,7 @@ class TestStepResponse:
             ts=t,
         )
         res = gm3s(tau=tau, **params_3s).run()
-        feq = res.L_p / (res.L_eq - res.L_bar)
+        feq = res.Lp / (res.Lp_eq - res.L_bar)
         # resample to t/tau
         # starting with 5*tau*dt steps, resample to a clean 500 steps
         feq = np.interp(np.linspace(0, 5*tau, 500), res.ts, feq)
