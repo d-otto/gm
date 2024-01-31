@@ -32,8 +32,6 @@ from scipy.stats import norm
 import logging
 from tqdm import tqdm
 
-from . import gm
-
 
 class flowline2d:
     def __init__(
