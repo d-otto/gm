@@ -14,6 +14,7 @@ dependencies = [
     "xarray",
     "tqdm",
     "numba",
+    "dill",
 ]
 
 [build-system]
